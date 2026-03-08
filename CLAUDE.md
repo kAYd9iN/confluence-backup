@@ -1,4 +1,4 @@
-# confluence-backup — v0.1.0 RELEASED (2026-03-08)
+# confluence-backup — v0.2.0 (2026-03-08)
 
 Backup tool for Confluence Cloud. Backs up spaces, pages (HTML), blog posts,
 comments, attachments, templates, users, and space permissions into a
@@ -20,8 +20,8 @@ hierarchical directory structure with HMAC-SHA-256 signed manifest.
 | `internal/api/confluence.go` | Resource types + fetch functions for all 8 data types |
 | `internal/backup/tree.go` | Builds page hierarchy from flat API list |
 | `internal/backup/backup.go` | Orchestration, two-level worker pool (3 spaces × cap 20 pages) |
-| `internal/backup/manifest.go` | SHA256 per file + HMAC-SHA-256 .sig |
-| `internal/storage/writer.go` | Hierarchical writer, 0600 files, path-traversal protection |
+| `internal/backup/manifest.go` | SHA256 per file + HMAC-SHA-256 .sig, sync.Mutex protected |
+| `internal/storage/writer.go` | Hierarchical writer, 0600 files, path-traversal + symlink protection |
 | `cmd/backup/main.go` | CLI entry point |
 
 ## Architecture
@@ -41,19 +41,12 @@ hierarchical directory structure with HMAC-SHA-256 signed manifest.
 - Versioning: 0ver — v0.1.0, v0.2.0, ... (https://0ver.org/)
 - go.mod: go 1.25.8 / CI go-version: '1.26' — do not change
 
-## Confluence Pages (HB Space — CB space not yet created)
-
-- Confluence Backup Tool parent (ID: 2949157)
-- CB: Sicherheitskonzept (ID: 3473409)
-- CB: Design & Architektur (ID: 3473429)
-- CB: Betrieb & Installation (ID: 3473449)
-- URL: https://ewigepluseins.atlassian.net/wiki/spaces/HB/pages/2949157
-
 ## Pending Manual Steps
 
 - Set SCORECARD_TOKEN secret (PAT with repo + read:org)
 - Set COMMIT_SIGNING_PUBLIC_KEY secret (GPG key)
-- Set CONFLUENCE_TOKEN secret + CONFLUENCE_DOMAIN variable for api-update-check workflow
+- Set CI_CONFLUENCE_TOKEN secret (read-only PAT for api-update-check workflow)
+- Set CONFLUENCE_TOKEN secret + CONFLUENCE_DOMAIN variable (for actual backups)
 
 ## Extending: Adding a New Data Type
 
