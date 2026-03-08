@@ -109,7 +109,7 @@ func (c *Client) Download(ctx context.Context, url string) (io.ReadCloser, error
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		resp.Body.Close() // #nosec G104 -- Close() error on error path is not actionable
 		return nil, fmt.Errorf("download HTTP %d", resp.StatusCode)
 	}
 	return resp.Body, nil

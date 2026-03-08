@@ -12,7 +12,9 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    if: ${{ secrets.CONFLUENCE_TOKEN != '' && vars.CONFLUENCE_DOMAIN != '' }}
+    # Gate only on the variable — secrets cannot be accessed in job-level if conditions.
+    # If CONFLUENCE_DOMAIN is set but CONFLUENCE_TOKEN is missing, the step fails visibly.
+    if: ${{ vars.CONFLUENCE_DOMAIN != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
