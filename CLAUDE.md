@@ -1,4 +1,4 @@
-# confluence-backup
+# confluence-backup — v0.1.0 RELEASED (2026-03-08)
 
 Backup tool for Confluence Cloud. Backs up spaces, pages (HTML), blog posts,
 comments, attachments, templates, users, and space permissions into a
