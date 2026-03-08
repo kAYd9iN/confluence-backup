@@ -20,11 +20,12 @@ func runVerify(args []string) int {
 		return 1
 	}
 
-	_, token, err := getCredentials()
+	creds, err := getCredentials()
 	if err != nil {
 		slog.Error("credentials error", "err", err)
 		return 1
 	}
+	token := creds.token
 
 	manifestPath := filepath.Join(*dir, "backup-manifest.json")
 	if err := backup.VerifyManifest(manifestPath, token); err != nil {

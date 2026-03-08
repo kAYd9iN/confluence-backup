@@ -50,7 +50,7 @@ func run(args []string) int {
 		return 1
 	}
 
-	email, token, err := getCredentials()
+	creds, err := getCredentials()
 	if err != nil {
 		slog.Error("credentials error", "err", err)
 		return 1
@@ -67,7 +67,18 @@ func run(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	client := api.NewClient(*domain, email, token)
+	var client *api.Client
+	if creds.bearer {
+		cloudID, err := api.DiscoverCloudID(creds.token, *domain)
+		if err != nil {
+			slog.Error("cloud ID discovery failed", "err", err)
+			return 1
+		}
+		slog.Info("discovered cloud ID", "cloudID", cloudID)
+		client = api.NewClientBearer(api.GatewayURL(cloudID), creds.token)
+	} else {
+		client = api.NewClient(*domain, creds.email, creds.token)
+	}
 	cfg := backup.Config{
 		Domain:             *domain,
 		OutputDir:          *output,
@@ -86,11 +97,11 @@ func run(args []string) int {
 	if err != nil {
 		slog.Error("backup completed with errors", "err", err)
 		// Write manifest even on partial failure
-		writeSignedManifest(backupDir, token)
+		writeSignedManifest(backupDir, creds.token)
 		return 1
 	}
 
-	writeSignedManifest(backupDir, token)
+	writeSignedManifest(backupDir, creds.token)
 	slog.Info("backup complete", "dir", backupDir)
 	return 0
 }

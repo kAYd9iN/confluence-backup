@@ -21,19 +21,27 @@ const (
 	maxBodyBytes = 100 * 1024 * 1024 // 100 MiB per response
 )
 
+type authMode int
+
+const (
+	authBasic  authMode = iota
+	authBearer authMode = iota
+)
+
 // Client is an authenticated HTTP client for the Confluence Cloud API.
 // It only supports GET requests — no Post(), Patch(), or Delete() methods exist.
 type Client struct {
 	httpClient *http.Client
-	baseURL    string // e.g. "https://your-org.atlassian.net"
+	baseURL    string // e.g. "https://your-org.atlassian.net" or API gateway URL
 	email      string
 	token      string
+	auth       authMode
 	limiter    *rate.Limiter
 	MaxRetries int
 	RetryDelay time.Duration
 }
 
-// NewClient creates a client for the given Atlassian domain.
+// NewClient creates a client using Basic Auth for the given Atlassian domain.
 // domain may be a bare hostname ("myorg.atlassian.net") or a full URL
 // ("http://127.0.0.1:PORT") — the latter is used by tests.
 // email and token are the Atlassian account credentials — never logged or returned.
@@ -47,6 +55,26 @@ func NewClient(domain, email, token string) *Client {
 		baseURL:    baseURL,
 		email:      email,
 		token:      token,
+		auth:       authBasic,
+		limiter:    rate.NewLimiter(rateLimit, rateBurst),
+		MaxRetries: maxRetries,
+		RetryDelay: 2 * time.Second,
+	}
+}
+
+// NewClientBearer creates a client using Bearer auth against the given base URL.
+// baseURL should be the Atlassian API Gateway URL for the site:
+// "https://api.atlassian.com/ex/confluence/{cloudID}" — or a test server URL.
+// token is a service account API token — never logged or returned.
+func NewClientBearer(baseURL, token string) *Client {
+	if !strings.Contains(baseURL, "://") {
+		baseURL = "https://" + baseURL
+	}
+	return &Client{
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		baseURL:    baseURL,
+		token:      token,
+		auth:       authBearer,
 		limiter:    rate.NewLimiter(rateLimit, rateBurst),
 		MaxRetries: maxRetries,
 		RetryDelay: 2 * time.Second,
@@ -141,7 +169,11 @@ func (c *Client) doDownload(ctx context.Context, rawURL string) (io.ReadCloser, 
 	if err != nil {
 		return nil, false, err
 	}
-	req.SetBasicAuth(c.email, c.token)
+	if c.auth == authBearer {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	} else {
+		req.SetBasicAuth(c.email, c.token)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -166,7 +198,11 @@ func (c *Client) doGet(ctx context.Context, url string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	req.SetBasicAuth(c.email, c.token)
+	if c.auth == authBearer {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	} else {
+		req.SetBasicAuth(c.email, c.token)
+	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)

@@ -9,6 +9,25 @@ import (
 	"github.com/kAYd9iN/confluence-backup/internal/api"
 )
 
+func TestNewClientBearer_UsesBearerAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer secret-token" {
+			t.Errorf("expected Bearer auth, got: %s", auth)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"results":[],"_links":{}}`))
+	}))
+	defer srv.Close()
+
+	c := api.NewClientBearer(srv.URL, "secret-token")
+	_, err := c.Get(context.Background(), "/wiki/api/v2/spaces")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClient_Get_UsesBasicAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()

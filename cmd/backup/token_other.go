@@ -7,14 +7,22 @@ import (
 	"os"
 )
 
-func getCredentials() (email, token string, err error) {
-	email = os.Getenv("CONFLUENCE_EMAIL")
-	token = os.Getenv("CONFLUENCE_TOKEN")
-	if email == "" {
-		return "", "", fmt.Errorf("CONFLUENCE_EMAIL environment variable not set")
-	}
+// credentials holds the auth configuration for the backup client.
+type credentials struct {
+	email  string // set for Basic Auth (personal/ATATT tokens)
+	token  string
+	bearer bool // true when using Bearer Auth (service account/ATSTT tokens)
+}
+
+func getCredentials() (credentials, error) {
+	token := os.Getenv("CONFLUENCE_TOKEN")
 	if token == "" {
-		return "", "", fmt.Errorf("CONFLUENCE_TOKEN environment variable not set")
+		return credentials{}, fmt.Errorf("CONFLUENCE_TOKEN environment variable not set")
 	}
-	return email, token, nil
+	email := os.Getenv("CONFLUENCE_EMAIL")
+	if email != "" {
+		return credentials{email: email, token: token, bearer: false}, nil
+	}
+	// No email set → Bearer mode (service account token via API Gateway).
+	return credentials{token: token, bearer: true}, nil
 }
