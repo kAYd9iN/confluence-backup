@@ -94,7 +94,8 @@ func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
 // Download streams a binary response from a full URL (for attachment files).
 // The URL must be on the same host as the client domain — SSRF protection.
 // Caller MUST close the returned ReadCloser.
-// No body size limit — attachments can be large by design.
+// No body size limit is enforced — attachment files can be arbitrarily large by
+// design. Operators should ensure sufficient disk space before enabling --attachments.
 // Retries on 429 and 5xx, same as Get().
 func (c *Client) Download(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 	// Validate that the URL stays on the expected host (SSRF protection, #7).

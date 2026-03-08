@@ -78,6 +78,7 @@ func run(args []string) int {
 		ToolVersion:        version,
 	}
 
+	slog.Warn("backup output is not encrypted — ensure the output directory is stored on an encrypted volume and restricted to authorised users")
 	slog.Info("starting backup", "domain", *domain, "output", *output,
 		"attachments", *attachments, "dry-run", *dryRun)
 

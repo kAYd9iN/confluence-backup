@@ -24,7 +24,9 @@ jobs:
       - name: Check API schema
         id: check
         env:
-          CONFLUENCE_TOKEN: ${{ secrets.CONFLUENCE_TOKEN }}
+          # CI_CONFLUENCE_TOKEN should be a read-only token scoped to the minimum
+          # required API endpoints — distinct from the full-backup CONFLUENCE_TOKEN.
+          CONFLUENCE_TOKEN: ${{ secrets.CI_CONFLUENCE_TOKEN }}
           CONFLUENCE_DOMAIN: ${{ vars.CONFLUENCE_DOMAIN }}
         run: |
           set +e

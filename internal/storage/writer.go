@@ -57,6 +57,17 @@ func (w *Writer) WriteFile(relPath string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0750); err != nil {
 		return fmt.Errorf("create dir for %s: %w", relPath, err)
 	}
+
+	// Verify the resolved path is still inside the backup root (symlink protection).
+	if realDir, err := filepath.EvalSymlinks(filepath.Dir(dest)); err == nil {
+		if realRoot, err := filepath.EvalSymlinks(w.dir); err == nil {
+			rel2, err := filepath.Rel(realRoot, realDir)
+			if err != nil || isOutsideDir(rel2) {
+				return fmt.Errorf("symlink escape detected for %q", relPath)
+			}
+		}
+	}
+
 	return os.WriteFile(dest, data, 0600)
 }
 
@@ -72,6 +83,16 @@ func (w *Writer) WriteBinaryStream(relPath string, r io.Reader) error {
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0750); err != nil {
 		return fmt.Errorf("create dir for %s: %w", relPath, err)
+	}
+
+	// Verify the resolved path is still inside the backup root (symlink protection).
+	if realDir, err := filepath.EvalSymlinks(filepath.Dir(dest)); err == nil {
+		if realRoot, err := filepath.EvalSymlinks(w.dir); err == nil {
+			rel2, err := filepath.Rel(realRoot, realDir)
+			if err != nil || isOutsideDir(rel2) {
+				return fmt.Errorf("symlink escape detected for %q", relPath)
+			}
+		}
 	}
 
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) // #nosec G304 -- dest is validated above

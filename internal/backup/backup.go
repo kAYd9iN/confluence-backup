@@ -142,7 +142,9 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 		if err := w.WriteFile(relPath, spaceJSON); err != nil {
 			return err
 		}
-		manifest.AddFile(filepath.Join(w.Dir(), relPath)) // #nosec G104 -- error logged or non-critical in backup context
+		if err := manifest.AddFile(filepath.Join(w.Dir(), relPath)); err != nil {
+			slog.Warn("manifest update failed", "path", relPath, "err", err)
+		}
 	}
 
 	// Templates
@@ -151,12 +153,19 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 		slog.Warn("templates fetch failed", "space", sp.Key, "err", err)
 	}
 	for _, tmpl := range templates {
-		tJSON, _ := json.MarshalIndent(tmpl, "", "  ")
+		tJSON, err := json.MarshalIndent(tmpl, "", "  ")
+		if err != nil {
+			slog.Warn("template marshal failed", "space", sp.Key, "name", tmpl.Name, "err", err)
+			continue
+		}
 		tPath := filepath.Join("spaces", sp.Key, "templates",
 			storage.SanitizeName(tmpl.Name)+".json")
 		if !cfg.DryRun {
-			w.WriteFile(tPath, tJSON)                          // #nosec G104 -- error logged or non-critical in backup context
-			manifest.AddFile(filepath.Join(w.Dir(), tPath))   // #nosec G104 -- error logged or non-critical in backup context
+			if err := w.WriteFile(tPath, tJSON); err != nil {
+				slog.Warn("template write failed", "space", sp.Key, "name", tmpl.Name, "err", err)
+			} else if err := manifest.AddFile(filepath.Join(w.Dir(), tPath)); err != nil {
+				slog.Warn("manifest update failed", "path", tPath, "err", err)
+			}
 		}
 	}
 
@@ -230,16 +239,18 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 	manifest *Manifest, page api.Page, dirPath string, cfg Config) error {
 
-	// index.html
+	// index.html — failure is fatal for this page
 	htmlPath := filepath.Join(dirPath, "index.html")
 	if !cfg.DryRun {
 		if err := w.WriteFile(htmlPath, []byte(page.Body.View.Value)); err != nil {
 			return err
 		}
-		manifest.AddFile(filepath.Join(w.Dir(), htmlPath)) // #nosec G104 -- error logged or non-critical in backup context
+		if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
+			slog.Warn("manifest update failed", "path", htmlPath, "err", err)
+		}
 	}
 
-	// page.json (metadata without body to keep it small)
+	// page.json (metadata without body) — failure is fatal for this page
 	meta := struct {
 		ID       string          `json:"id"`
 		Title    string          `json:"title"`
@@ -253,34 +264,54 @@ func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 		ParentID: page.ParentID, Status: page.Status,
 		Version: page.Version, Labels: page.Labels,
 	}
-	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal page metadata: %w", err)
+	}
 	metaPath := filepath.Join(dirPath, "page.json")
 	if !cfg.DryRun {
-		w.WriteFile(metaPath, metaJSON)                          // #nosec G104 -- error logged or non-critical in backup context
-		manifest.AddFile(filepath.Join(w.Dir(), metaPath))      // #nosec G104 -- error logged or non-critical in backup context
+		if err := w.WriteFile(metaPath, metaJSON); err != nil {
+			return err
+		}
+		if err := manifest.AddFile(filepath.Join(w.Dir(), metaPath)); err != nil {
+			slog.Warn("manifest update failed", "path", metaPath, "err", err)
+		}
 	}
 
-	// comments.json
+	// comments.json — non-critical, log and continue on failure
 	comments, err := api.FetchComments(ctx, client, page.ID)
 	if err != nil {
 		slog.Warn("comments fetch failed", "pageId", page.ID, "err", err)
 	} else if !cfg.DryRun {
-		cJSON, _ := json.MarshalIndent(comments, "", "  ")
-		cPath := filepath.Join(dirPath, "comments.json")
-		w.WriteFile(cPath, cJSON)                            // #nosec G104 -- error logged or non-critical in backup context
-		manifest.AddFile(filepath.Join(w.Dir(), cPath))     // #nosec G104 -- error logged or non-critical in backup context
+		cJSON, err := json.MarshalIndent(comments, "", "  ")
+		if err != nil {
+			slog.Warn("comments marshal failed", "pageId", page.ID, "err", err)
+		} else {
+			cPath := filepath.Join(dirPath, "comments.json")
+			if err := w.WriteFile(cPath, cJSON); err != nil {
+				slog.Warn("comments write failed", "pageId", page.ID, "err", err)
+			} else if err := manifest.AddFile(filepath.Join(w.Dir(), cPath)); err != nil {
+				slog.Warn("manifest update failed", "path", cPath, "err", err)
+			}
+		}
 	}
 
-	// attachments
+	// attachments — non-critical, log and continue on failure
 	atts, err := api.FetchAttachmentMeta(ctx, client, page.ID)
 	if err != nil {
 		slog.Warn("attachments fetch failed", "pageId", page.ID, "err", err)
 	} else if !cfg.DryRun {
-		attJSON, _ := json.MarshalIndent(atts, "", "  ")
-		attPath := filepath.Join(dirPath, "attachments", "metadata.json")
-		w.WriteFile(attPath, attJSON)                        // #nosec G104 -- error logged or non-critical in backup context
-		manifest.AddFile(filepath.Join(w.Dir(), attPath))   // #nosec G104 -- error logged or non-critical in backup context
-
+		attJSON, err := json.MarshalIndent(atts, "", "  ")
+		if err != nil {
+			slog.Warn("attachments marshal failed", "pageId", page.ID, "err", err)
+		} else {
+			attPath := filepath.Join(dirPath, "attachments", "metadata.json")
+			if err := w.WriteFile(attPath, attJSON); err != nil {
+				slog.Warn("attachments metadata write failed", "pageId", page.ID, "err", err)
+			} else if err := manifest.AddFile(filepath.Join(w.Dir(), attPath)); err != nil {
+				slog.Warn("manifest update failed", "path", attPath, "err", err)
+			}
+		}
 		if cfg.IncludeAttachments {
 			downloadAttachments(ctx, client, w, manifest, atts, dirPath)
 		}
@@ -291,11 +322,24 @@ func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 
 func writePost(_ context.Context, _ *api.Client, w *storage.Writer,
 	manifest *Manifest, post api.BlogPost, dirPath string) {
-	w.WriteFile(filepath.Join(dirPath, "index.html"), []byte(post.Body.View.Value)) // #nosec G104 -- error logged or non-critical in backup context
-	postJSON, _ := json.MarshalIndent(post, "", "  ")
-	w.WriteFile(filepath.Join(dirPath, "post.json"), postJSON)                      // #nosec G104 -- error logged or non-critical in backup context
-	manifest.AddFile(filepath.Join(w.Dir(), dirPath, "index.html"))                 // #nosec G104 -- error logged or non-critical in backup context
-	manifest.AddFile(filepath.Join(w.Dir(), dirPath, "post.json"))                  // #nosec G104 -- error logged or non-critical in backup context
+	htmlPath := filepath.Join(dirPath, "index.html")
+	if err := w.WriteFile(htmlPath, []byte(post.Body.View.Value)); err != nil {
+		slog.Warn("blog post html write failed", "postId", post.ID, "err", err)
+	} else if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
+		slog.Warn("manifest update failed", "path", htmlPath, "err", err)
+	}
+
+	postJSON, err := json.MarshalIndent(post, "", "  ")
+	if err != nil {
+		slog.Warn("blog post marshal failed", "postId", post.ID, "err", err)
+		return
+	}
+	jsonPath := filepath.Join(dirPath, "post.json")
+	if err := w.WriteFile(jsonPath, postJSON); err != nil {
+		slog.Warn("blog post json write failed", "postId", post.ID, "err", err)
+	} else if err := manifest.AddFile(filepath.Join(w.Dir(), jsonPath)); err != nil {
+		slog.Warn("manifest update failed", "path", jsonPath, "err", err)
+	}
 }
 
 func downloadAttachments(ctx context.Context, client *api.Client, w *storage.Writer,
@@ -326,7 +370,9 @@ func downloadAttachments(ctx context.Context, client *api.Client, w *storage.Wri
 				slog.Warn("attachment write failed", "name", att.Title, "err", err)
 				return
 			}
-			manifest.AddFile(filepath.Join(w.Dir(), filePath)) // #nosec G104 -- error logged or non-critical in backup context
+			if err := manifest.AddFile(filepath.Join(w.Dir(), filePath)); err != nil {
+				slog.Warn("manifest update failed", "path", filePath, "err", err)
+			}
 		}()
 	}
 	wg.Wait()
@@ -348,6 +394,8 @@ func fetchAndWriteUsers(ctx context.Context, client *api.Client, w *storage.Writ
 	if err := w.WriteFile(usersPath, usersJSON); err != nil {
 		return err
 	}
-	manifest.AddFile(filepath.Join(w.Dir(), usersPath)) // #nosec G104 -- error logged or non-critical in backup context
+	if err := manifest.AddFile(filepath.Join(w.Dir(), usersPath)); err != nil {
+		slog.Warn("manifest update failed", "path", usersPath, "err", err)
+	}
 	return nil
 }
