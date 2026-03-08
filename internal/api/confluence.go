@@ -76,9 +76,9 @@ type Page struct {
 	Status     string      `json:"status"`
 	Version    PageVersion `json:"version"`
 	Body       struct {
-		View struct {
+		Storage struct {
 			Value string `json:"value"`
-		} `json:"view"`
+		} `json:"storage"`
 	} `json:"body"`
 	Labels []Label `json:"labels,omitempty"`
 }
@@ -90,18 +90,18 @@ type BlogPost struct {
 	Status  string      `json:"status"`
 	Version PageVersion `json:"version"`
 	Body    struct {
-		View struct {
+		Storage struct {
 			Value string `json:"value"`
-		} `json:"view"`
+		} `json:"storage"`
 	} `json:"body"`
 }
 
 type Comment struct {
 	ID   string `json:"id"`
 	Body struct {
-		View struct {
+		Storage struct {
 			Value string `json:"value"`
-		} `json:"view"`
+		} `json:"storage"`
 	} `json:"body"`
 	Version json.RawMessage `json:"version"`
 }

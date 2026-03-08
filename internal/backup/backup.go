@@ -242,7 +242,7 @@ func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 	// index.html — failure is fatal for this page
 	htmlPath := filepath.Join(dirPath, "index.html")
 	if !cfg.DryRun {
-		if err := w.WriteFile(htmlPath, []byte(page.Body.View.Value)); err != nil {
+		if err := w.WriteFile(htmlPath, []byte(page.Body.Storage.Value)); err != nil {
 			return err
 		}
 		if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
@@ -323,7 +323,7 @@ func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 func writePost(_ context.Context, _ *api.Client, w *storage.Writer,
 	manifest *Manifest, post api.BlogPost, dirPath string) {
 	htmlPath := filepath.Join(dirPath, "index.html")
-	if err := w.WriteFile(htmlPath, []byte(post.Body.View.Value)); err != nil {
+	if err := w.WriteFile(htmlPath, []byte(post.Body.Storage.Value)); err != nil {
 		slog.Warn("blog post html write failed", "postId", post.ID, "err", err)
 	} else if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
 		slog.Warn("manifest update failed", "path", htmlPath, "err", err)

@@ -32,6 +32,35 @@ func TestFetchSpaces(t *testing.T) {
 	}
 }
 
+func TestFetchPages_DecodesStorageBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{
+					"id": "1", "title": "Test", "spaceId": "42", "status": "current",
+					"body": map[string]any{
+						"storage": map[string]any{"value": "<p>Hello World</p>"},
+					},
+				},
+			},
+			"_links": map[string]any{},
+		})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	pages, err := api.FetchPages(context.Background(), c, "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(pages))
+	}
+	if pages[0].Body.Storage.Value != "<p>Hello World</p>" {
+		t.Errorf("expected storage body, got %q", pages[0].Body.Storage.Value)
+	}
+}
+
 func TestFetchPages_UsesStorageBodyFormat(t *testing.T) {
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
