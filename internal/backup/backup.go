@@ -6,12 +6,23 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/kAYd9iN/confluence-backup/internal/api"
 	"github.com/kAYd9iN/confluence-backup/internal/storage"
 )
+
+// controlChars matches ASCII control characters and ANSI escape sequences.
+// Used to sanitize API-supplied strings before logging (log injection prevention).
+var controlChars = regexp.MustCompile(`[\x00-\x1f\x7f]|\x1b\[[0-9;]*[a-zA-Z]`)
+
+func sanitizeLog(s string) string {
+	return controlChars.ReplaceAllString(s, "?")
+}
+
+const maxTreeDepth = 100 // prevents stack overflow on pathologically deep page trees
 
 // Config controls what gets backed up.
 type Config struct {
@@ -118,7 +129,7 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 	manifest *Manifest, sp api.Space, cfg Config,
 	pageSem chan struct{}, collectUser func(string)) error {
 
-	slog.Info("backing up space", "key", sp.Key, "name", sp.Name)
+	slog.Info("backing up space", "key", sanitizeLog(sp.Key), "name", sanitizeLog(sp.Name))
 
 	// Space detail (permissions + properties)
 	detail, err := api.FetchSpaceDetail(ctx, client, sp)
@@ -163,8 +174,12 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 	var pageErrs []error
 	var pageErrMu sync.Mutex
 
-	var writeTree func(nodes []*PageNode, parentRelPath string)
-	writeTree = func(nodes []*PageNode, parentRelPath string) {
+	var writeTree func(nodes []*PageNode, parentRelPath string, depth int)
+	writeTree = func(nodes []*PageNode, parentRelPath string, depth int) {
+		if depth > maxTreeDepth {
+			slog.Warn("page tree depth limit reached — skipping subtree", "depth", depth, "limit", maxTreeDepth)
+			return
+		}
 		for _, node := range nodes {
 			node := node
 			pageWg.Add(1)
@@ -180,14 +195,16 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 					pageErrs = append(pageErrs, err)
 					pageErrMu.Unlock()
 					manifest.AddFailedFile(dirPath+"/page.json", err)
-					slog.Error("page backup failed", "id", node.Page.ID, "title", node.Page.Title, "err", err)
+					slog.Error("page backup failed",
+						"id", node.Page.ID,
+						"title", sanitizeLog(node.Page.Title),
+						"err", err)
 				}
-				// Children can start after parent dir is created
-				writeTree(node.Children, dirPath)
+				writeTree(node.Children, dirPath, depth+1)
 			}()
 		}
 	}
-	writeTree(roots, filepath.Join("spaces", sp.Key, "pages"))
+	writeTree(roots, filepath.Join("spaces", sp.Key, "pages"), 0)
 	pageWg.Wait()
 
 	// Blog posts

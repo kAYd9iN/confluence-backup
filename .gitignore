@@ -1,0 +1,12 @@
+# Build output
+confluence-backup
+confluence-backup.exe
+
+# Backup output directories — never commit actual backup data
+backups/
+out/
+*.backup/
+
+# OS
+.DS_Store
+Thumbs.db

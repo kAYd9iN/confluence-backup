@@ -92,27 +92,70 @@ func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
 }
 
 // Download streams a binary response from a full URL (for attachment files).
+// The URL must be on the same host as the client domain — SSRF protection.
 // Caller MUST close the returned ReadCloser.
-// No body size limit — attachments can be large.
-func (c *Client) Download(ctx context.Context, url string) (io.ReadCloser, error) {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("rate limiter: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// No body size limit — attachments can be large by design.
+// Retries on 429 and 5xx, same as Get().
+func (c *Client) Download(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+	// Validate that the URL stays on the expected host (SSRF protection, #7).
+	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid download URL: %w", err)
+	}
+	expected, _ := url.Parse(c.baseURL)
+	if parsed.Host != expected.Host {
+		return nil, fmt.Errorf("download URL host %q does not match client domain %q — possible SSRF", parsed.Host, expected.Host)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
+		if attempt > 0 {
+			delay := c.RetryDelay * time.Duration(1<<uint(attempt-1))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		if err := c.limiter.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("rate limiter: %w", err)
+		}
+
+		rc, retryable, err := c.doDownload(ctx, rawURL)
+		if err == nil {
+			return rc, nil
+		}
+		if !retryable {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("download after %d retries: %w", c.MaxRetries, lastErr)
+}
+
+func (c *Client) doDownload(ctx context.Context, rawURL string) (io.ReadCloser, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, true, err // network errors are retryable
 	}
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
 		resp.Body.Close() // #nosec G104 -- Close() error on error path is not actionable
-		return nil, fmt.Errorf("download HTTP %d", resp.StatusCode)
+		return nil, true, fmt.Errorf("rate limited (429)")
+	case resp.StatusCode >= 500:
+		resp.Body.Close() // #nosec G104
+		return nil, true, fmt.Errorf("server error HTTP %d", resp.StatusCode)
+	case resp.StatusCode != http.StatusOK:
+		resp.Body.Close() // #nosec G104
+		return nil, false, fmt.Errorf("download HTTP %d", resp.StatusCode)
 	}
-	return resp.Body, nil
+	return resp.Body, false, nil
 }
 
 func (c *Client) doGet(ctx context.Context, url string) ([]byte, bool, error) {

@@ -7,13 +7,22 @@ import (
 	"regexp"
 )
 
-// validDomain matches Atlassian Cloud domains.
+// validDomain matches hostnames: alphanumeric, hyphens, dots, max 253 chars.
 var validDomain = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9\-\.]{0,253}$`)
 
-// ValidateDomain returns an error if domain contains unsafe characters.
+// privateHostPattern blocks loopback and RFC-1918 addresses to prevent SSRF.
+var privateHostPattern = regexp.MustCompile(
+	`(?i)^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|::1|0\.0\.0\.0)`,
+)
+
+// ValidateDomain returns an error if domain contains unsafe characters or
+// resolves to a private/loopback address range (SSRF protection).
 func ValidateDomain(domain string) error {
 	if !validDomain.MatchString(domain) {
-		return fmt.Errorf("invalid domain %q", domain)
+		return fmt.Errorf("invalid domain %q: must be a valid hostname", domain)
+	}
+	if privateHostPattern.MatchString(domain) {
+		return fmt.Errorf("domain %q matches a private/loopback address range — refused to prevent SSRF", domain)
 	}
 	return nil
 }

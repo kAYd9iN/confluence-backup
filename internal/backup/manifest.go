@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,7 +27,10 @@ type Summary struct {
 	Failed     int `json:"failed"`
 }
 
+// Manifest records backup metadata and per-file integrity hashes.
+// All mutating methods are safe to call from concurrent goroutines.
 type Manifest struct {
+	mu          sync.Mutex  // protects Files during concurrent backup
 	Timestamp   time.Time   `json:"timestamp"`
 	ToolVersion string      `json:"tool_version"`
 	Domain      string      `json:"domain"`
@@ -42,6 +46,8 @@ func NewManifest(domain, version string, ts time.Time) *Manifest {
 	}
 }
 
+// AddFile hashes the file at path and records it as a successful entry.
+// Safe to call concurrently from multiple goroutines.
 func (m *Manifest) AddFile(path string) error {
 	f, err := os.Open(path) // #nosec G304 -- path is always an internally constructed backup path
 	if err != nil {
@@ -53,23 +59,34 @@ func (m *Manifest) AddFile(path string) error {
 	if _, err := io.Copy(h, f); err != nil {
 		return fmt.Errorf("hash %s: %w", path, err)
 	}
-	m.Files = append(m.Files, FileEntry{
+
+	entry := FileEntry{
 		Name:   filepath.Base(path),
 		SHA256: hex.EncodeToString(h.Sum(nil)),
 		Status: "ok",
-	})
+	}
+	m.mu.Lock()
+	m.Files = append(m.Files, entry)
+	m.mu.Unlock()
 	return nil
 }
 
+// AddFailedFile records an endpoint that could not be fetched or written.
+// Safe to call concurrently from multiple goroutines.
 func (m *Manifest) AddFailedFile(name string, err error) {
+	m.mu.Lock()
 	m.Files = append(m.Files, FileEntry{
 		Name:   name,
 		Status: "failed",
 		Error:  err.Error(),
 	})
+	m.mu.Unlock()
 }
 
+// Write serialises the manifest and writes an HMAC-SHA-256 signature.
+// Must not be called concurrently with AddFile/AddFailedFile.
 func (m *Manifest) Write(path, token string) error {
+	m.mu.Lock()
 	m.Summary = Summary{TotalFiles: len(m.Files)}
 	for _, f := range m.Files {
 		if f.Status == "ok" {
@@ -78,6 +95,8 @@ func (m *Manifest) Write(path, token string) error {
 			m.Summary.Failed++
 		}
 	}
+	m.mu.Unlock()
+
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
