@@ -26,6 +26,7 @@ const (
 type Client struct {
 	httpClient *http.Client
 	baseURL    string // e.g. "https://your-org.atlassian.net"
+	email      string
 	token      string
 	limiter    *rate.Limiter
 	MaxRetries int
@@ -35,8 +36,8 @@ type Client struct {
 // NewClient creates a client for the given Atlassian domain.
 // domain may be a bare hostname ("myorg.atlassian.net") or a full URL
 // ("http://127.0.0.1:PORT") — the latter is used by tests.
-// token is a Personal Access Token — never logged or returned.
-func NewClient(domain, token string) *Client {
+// email and token are the Atlassian account credentials — never logged or returned.
+func NewClient(domain, email, token string) *Client {
 	baseURL := domain
 	if !strings.Contains(domain, "://") {
 		baseURL = "https://" + domain
@@ -44,6 +45,7 @@ func NewClient(domain, token string) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    baseURL,
+		email:      email,
 		token:      token,
 		limiter:    rate.NewLimiter(rateLimit, rateBurst),
 		MaxRetries: maxRetries,
@@ -139,7 +141,7 @@ func (c *Client) doDownload(ctx context.Context, rawURL string) (io.ReadCloser, 
 	if err != nil {
 		return nil, false, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.SetBasicAuth(c.email, c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -164,7 +166,7 @@ func (c *Client) doGet(ctx context.Context, url string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.SetBasicAuth(c.email, c.token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)

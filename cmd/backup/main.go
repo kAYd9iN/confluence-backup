@@ -50,9 +50,9 @@ func run(args []string) int {
 		return 1
 	}
 
-	token, err := getToken()
+	email, token, err := getCredentials()
 	if err != nil {
-		slog.Error("token error", "err", err)
+		slog.Error("credentials error", "err", err)
 		return 1
 	}
 
@@ -67,7 +67,7 @@ func run(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	client := api.NewClient(*domain, token)
+	client := api.NewClient(*domain, email, token)
 	cfg := backup.Config{
 		Domain:             *domain,
 		OutputDir:          *output,

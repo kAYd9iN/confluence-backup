@@ -20,9 +20,9 @@ func runVerify(args []string) int {
 		return 1
 	}
 
-	token, err := getToken()
+	_, token, err := getCredentials()
 	if err != nil {
-		slog.Error("token error", "err", err)
+		slog.Error("credentials error", "err", err)
 		return 1
 	}
 

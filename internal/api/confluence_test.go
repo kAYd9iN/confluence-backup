@@ -21,7 +21,7 @@ func TestFetchSpaces(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	spaces, err := api.FetchSpaces(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)

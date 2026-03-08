@@ -20,7 +20,7 @@ func TestFetchAll_SinglePage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	results, err := api.FetchAll(context.Background(), c, "/wiki/api/v2/spaces")
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestFetchAll_MultiPage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	results, err := api.FetchAll(context.Background(), c, "/wiki/api/v2/spaces")
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestFetchAll_EmptyResults(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	results, err := api.FetchAll(context.Background(), c, "/wiki/api/v2/spaces")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestFetchAll_PageCap(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	c.RetryDelay = 0
 	_, err := api.FetchAll(context.Background(), c, "/wiki/api/v2/spaces")
 	// Should stop at the safety cap and return an error.

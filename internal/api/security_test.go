@@ -17,7 +17,7 @@ func TestClient_TokenNotInError(t *testing.T) {
 	defer srv.Close()
 
 	secret := "super-secret-token-xyz"
-	c := api.NewClient(srv.URL, secret)
+	c := api.NewClient(srv.URL, "u@example.com", secret)
 	_, err := c.Get(context.Background(), "/test")
 	if err == nil {
 		t.Fatal("expected error")

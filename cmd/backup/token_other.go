@@ -7,10 +7,14 @@ import (
 	"os"
 )
 
-func getToken() (string, error) {
-	tok := os.Getenv("CONFLUENCE_TOKEN")
-	if tok == "" {
-		return "", fmt.Errorf("CONFLUENCE_TOKEN environment variable not set")
+func getCredentials() (email, token string, err error) {
+	email = os.Getenv("CONFLUENCE_EMAIL")
+	token = os.Getenv("CONFLUENCE_TOKEN")
+	if email == "" {
+		return "", "", fmt.Errorf("CONFLUENCE_EMAIL environment variable not set")
 	}
-	return tok, nil
+	if token == "" {
+		return "", "", fmt.Errorf("CONFLUENCE_TOKEN environment variable not set")
+	}
+	return email, token, nil
 }

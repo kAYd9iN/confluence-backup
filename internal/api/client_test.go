@@ -9,16 +9,35 @@ import (
 	"github.com/kAYd9iN/confluence-backup/internal/api"
 )
 
-func TestClient_Get_Success(t *testing.T) {
+func TestClient_Get_UsesBasicAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("missing auth header")
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "user@example.com" || pass != "test-token" {
+			t.Errorf("expected Basic auth with email/token, got Authorization: %s", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "test-token")
+	c := api.NewClient(srv.URL, "user@example.com", "test-token")
+	_, err := c.Get(context.Background(), "/wiki/api/v2/spaces")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClient_Get_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := r.BasicAuth(); !ok {
+			t.Errorf("missing Basic auth header")
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "test-token")
 	body, err := c.Get(context.Background(), "/wiki/api/v2/spaces")
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +59,7 @@ func TestClient_Get_RetryOn429(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	c.MaxRetries = 3
 	c.RetryDelay = 0
 	_, err := c.Get(context.Background(), "/test")
@@ -60,7 +79,7 @@ func TestClient_Get_NoRetryOn4xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := api.NewClient(srv.URL, "tok")
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
 	c.MaxRetries = 3
 	c.RetryDelay = 0
 	_, err := c.Get(context.Background(), "/test")

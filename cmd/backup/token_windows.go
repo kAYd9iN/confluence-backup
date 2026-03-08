@@ -9,14 +9,22 @@ import (
 	"github.com/danieljoos/wincred"
 )
 
-func getToken() (string, error) {
-	// Try env first; Windows Credential Manager as fallback.
-	if tok := os.Getenv("CONFLUENCE_TOKEN"); tok != "" {
-		return tok, nil
+func getCredentials() (email, token string, err error) {
+	email = os.Getenv("CONFLUENCE_EMAIL")
+	token = os.Getenv("CONFLUENCE_TOKEN")
+
+	if email == "" {
+		return "", "", fmt.Errorf("CONFLUENCE_EMAIL environment variable not set")
 	}
-	cred, err := wincred.GetGenericCredential("confluence-backup")
-	if err != nil {
-		return "", fmt.Errorf("CONFLUENCE_TOKEN not set and credential not found in Windows Credential Manager (target: confluence-backup): %w", err)
+
+	// Try env first; Windows Credential Manager as fallback for token.
+	if token == "" {
+		cred, credErr := wincred.GetGenericCredential("confluence-backup")
+		if credErr != nil {
+			return "", "", fmt.Errorf("CONFLUENCE_TOKEN not set and credential not found in Windows Credential Manager (target: confluence-backup): %w", credErr)
+		}
+		token = string(cred.CredentialBlob)
 	}
-	return string(cred.CredentialBlob), nil
+
+	return email, token, nil
 }
