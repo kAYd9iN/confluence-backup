@@ -41,7 +41,15 @@ hierarchical directory structure with HMAC-SHA-256 signed manifest.
 - Versioning: 0ver — v0.1.0, v0.2.0, ... (https://0ver.org/)
 - go.mod: go 1.25.8 / CI go-version: '1.26' — do not change
 
-## Pending Manual Steps (after first push)
+## Confluence Pages (HB Space — CB space not yet created)
+
+- Confluence Backup Tool parent (ID: 2949157)
+- CB: Sicherheitskonzept (ID: 3473409)
+- CB: Design & Architektur (ID: 3473429)
+- CB: Betrieb & Installation (ID: 3473449)
+- URL: https://ewigepluseins.atlassian.net/wiki/spaces/HB/pages/2949157
+
+## Pending Manual Steps
 
 - Set SCORECARD_TOKEN secret (PAT with repo + read:org)
 - Set COMMIT_SIGNING_PUBLIC_KEY secret (GPG key)
