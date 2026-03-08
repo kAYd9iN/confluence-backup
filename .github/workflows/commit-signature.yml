@@ -1,0 +1,97 @@
+name: commit-signature-verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base commit SHA (optional)"
+        required: false
+        type: string
+      head:
+        description: "Head commit SHA (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-commit-signatures:
+    # Without COMMIT_SIGNING_PUBLIC_KEY the job passes green even for unsigned
+    # commits (warn-only mode). Gate on COMMIT_SIGNING_ENABLED so the workflow
+    # is skipped (not silently green) until commit signing is enforced.
+    # To enable: Settings → Variables → COMMIT_SIGNING_ENABLED=true
+    #            Settings → Secrets → COMMIT_SIGNING_PUBLIC_KEY=<GPG pubkey>
+    runs-on: ubuntu-latest
+    if: ${{ vars.COMMIT_SIGNING_ENABLED == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Determine commit range
+        id: range
+        env:
+          INPUT_BASE: ${{ github.event.inputs.base }}
+          INPUT_HEAD: ${{ github.event.inputs.head }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            BASE="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
+            HEAD="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            BASE="${INPUT_BASE}"
+            HEAD="${INPUT_HEAD}"
+            if [ -z "$HEAD" ]; then
+              HEAD="$(git rev-parse HEAD)"
+            fi
+            if [ -z "$BASE" ]; then
+              BASE="$(git rev-parse "${HEAD}^" 2>/dev/null || echo 0000000000000000000000000000000000000000)"
+            fi
+          else
+            BASE="$(jq -r '.before' "$GITHUB_EVENT_PATH")"
+            HEAD="$(jq -r '.after' "$GITHUB_EVENT_PATH")"
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Verify commit signatures
+        env:
+          COMMIT_SIGNING_PUBLIC_KEY: ${{ secrets.COMMIT_SIGNING_PUBLIC_KEY }}
+          RANGE_BASE: ${{ steps.range.outputs.base }}
+          RANGE_HEAD: ${{ steps.range.outputs.head }}
+        run: |
+          chmod +x ./scripts/verify_signed_commits.sh
+          STRICT_FLAG=""
+          if [ -n "${COMMIT_SIGNING_PUBLIC_KEY:-}" ]; then
+            STRICT_FLAG="--strict"
+          fi
+          ./scripts/verify_signed_commits.sh \
+            ${STRICT_FLAG} \
+            "${RANGE_BASE}" \
+            "${RANGE_HEAD}"
+
+      - name: Cryptographic verification with trusted key
+        env:
+          COMMIT_SIGNING_PUBLIC_KEY: ${{ secrets.COMMIT_SIGNING_PUBLIC_KEY }}
+          RANGE_BASE: ${{ steps.range.outputs.base }}
+          RANGE_HEAD: ${{ steps.range.outputs.head }}
+        run: |
+          set -euo pipefail
+          if [ -z "${COMMIT_SIGNING_PUBLIC_KEY:-}" ]; then
+            echo "No COMMIT_SIGNING_PUBLIC_KEY configured; structure-only verification active."
+            exit 0
+          fi
+          printf '%s\n' "${COMMIT_SIGNING_PUBLIC_KEY}" | gpg --batch --import
+          if [ "${RANGE_BASE}" = "0000000000000000000000000000000000000000" ]; then
+            COMMITS=$(git rev-list "${RANGE_HEAD}")
+          else
+            COMMITS=$(git rev-list "${RANGE_BASE}..${RANGE_HEAD}")
+          fi
+          for c in $COMMITS; do
+            git verify-commit "$c"
+          done

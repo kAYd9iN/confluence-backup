@@ -1,0 +1,54 @@
+name: cbom
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-cbom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Generate SBoM
+        run: |
+          npx --yes @cyclonedx/cdxgen@12.1.1 \
+            --type go \
+            --output cbom.cdx.json \
+            .
+
+      - name: Optional sign SBoM
+        env:
+          CBOM_SIGNING_KEY_PEM: ${{ secrets.CBOM_SIGNING_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CBOM_SIGNING_KEY_PEM:-}" ]; then
+            echo "No CBOM_SIGNING_KEY_PEM configured; unsigned SBoM artifact only."
+            exit 0
+          fi
+          printf '%s\n' "${CBOM_SIGNING_KEY_PEM}" > /tmp/cbom-key.pem
+          if ! openssl dgst -sha256 -sign /tmp/cbom-key.pem -out cbom.cdx.json.sig cbom.cdx.json; then
+            echo "Signing failed. Continuing with unsigned artifact."
+            rm -f cbom.cdx.json.sig
+          fi
+          rm -f /tmp/cbom-key.pem
+
+      - name: Upload SBoM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cbom-cyclonedx
+          path: |
+            cbom.cdx.json
+            cbom.cdx.json.sig
+          retention-days: 365

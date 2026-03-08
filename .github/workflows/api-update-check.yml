@@ -1,0 +1,56 @@
+name: api-update-check
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # every Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.CONFLUENCE_TOKEN != '' && vars.CONFLUENCE_DOMAIN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Check API schema
+        id: check
+        env:
+          CONFLUENCE_TOKEN: ${{ secrets.CONFLUENCE_TOKEN }}
+          CONFLUENCE_DOMAIN: ${{ vars.CONFLUENCE_DOMAIN }}
+        run: |
+          set +e
+          bash scripts/check-api-schema.sh
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Open issue on drift
+        if: steps.check.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_DATE: ${{ github.run_id }}
+        run: |
+          DIFF=$(cat drift.diff 2>/dev/null || echo "(diff unavailable)")
+          TIMESTAMP=$(date -u +%Y-%m-%d)
+          gh issue create \
+            --title "Confluence API drift detected (${TIMESTAMP})" \
+            --label "api-drift" \
+            --body "$(cat <<'BODY'
+          ## Confluence API drift detected
+
+          The weekly API schema check found differences between the stored baseline
+          (`docs/api-snapshot.json`) and the current Confluence Cloud API responses.
+
+          ### Next steps
+
+          1. Review which fields were added or removed
+          2. Update `internal/api/confluence.go` if new fields should be backed up
+          3. Update `docs/api-snapshot.json` by running `scripts/check-api-schema.sh` locally
+          4. Commit the updated snapshot to close this issue
+          BODY
+          )"

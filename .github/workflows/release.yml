@@ -1,0 +1,110 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: confluence-backup-linux-amd64
+          - goos: linux
+            goarch: arm64
+            artifact: confluence-backup-linux-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: confluence-backup-windows-amd64.exe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build \
+            -mod=vendor \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o ${{ matrix.artifact }} \
+            ./cmd/backup/
+
+      - name: Attest SLSA provenance (Level 2)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          merge-multiple: true
+          path: dist/
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist/
+          sha256sum confluence-backup-linux-amd64 confluence-backup-linux-arm64 confluence-backup-windows-amd64.exe > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad
+
+      - name: Sign binaries with cosign (keyless / OIDC)
+        run: |
+          for binary in \
+            dist/confluence-backup-linux-amd64 \
+            dist/confluence-backup-linux-arm64 \
+            dist/confluence-backup-windows-amd64.exe; do
+            cosign sign-blob \
+              --yes \
+              --bundle "${binary}.bundle" \
+              "${binary}"
+          done
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --generate-notes \
+            --title "confluence-backup ${{ github.ref_name }}" \
+            dist/confluence-backup-linux-amd64 \
+            dist/confluence-backup-linux-arm64 \
+            dist/confluence-backup-windows-amd64.exe \
+            dist/confluence-backup-linux-amd64.bundle \
+            dist/confluence-backup-linux-arm64.bundle \
+            dist/confluence-backup-windows-amd64.exe.bundle \
+            dist/SHA256SUMS
