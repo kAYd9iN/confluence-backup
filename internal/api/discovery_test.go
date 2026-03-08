@@ -36,6 +36,22 @@ func TestDiscoverCloudID_MatchesByDomain(t *testing.T) {
 	}
 }
 
+func TestDiscoverCloudID_ReturnsErrorOn401(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	orig := api.AccessibleResourcesURL
+	api.AccessibleResourcesURL = srv.URL
+	defer func() { api.AccessibleResourcesURL = orig }()
+
+	_, err := api.DiscoverCloudID("tok", "myorg.atlassian.net")
+	if err == nil {
+		t.Error("expected error on 401")
+	}
+}
+
 func TestDiscoverCloudID_ErrorWhenDomainNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{

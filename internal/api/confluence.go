@@ -196,7 +196,7 @@ func FetchSpaceDetail(ctx context.Context, client *Client, space Space) (SpaceDe
 // FetchPages returns all pages in a space with HTML body.
 func FetchPages(ctx context.Context, client *Client, spaceID string) ([]Page, error) {
 	path := fmt.Sprintf(
-		"/wiki/api/v2/pages?spaceId=%s&body-format=view&limit=250&status=current", spaceID)
+		"/wiki/api/v2/pages?spaceId=%s&body-format=storage&limit=250&status=current", spaceID)
 	items, err := FetchAll(ctx, client, path)
 	if err != nil {
 		return nil, fmt.Errorf("fetch pages for space %s: %w", spaceID, err)
@@ -215,7 +215,7 @@ func FetchPages(ctx context.Context, client *Client, spaceID string) ([]Page, er
 // FetchBlogPosts returns all blog posts in a space with HTML body.
 func FetchBlogPosts(ctx context.Context, client *Client, spaceID string) ([]BlogPost, error) {
 	path := fmt.Sprintf(
-		"/wiki/api/v2/blogposts?spaceId=%s&body-format=view&limit=250&status=current", spaceID)
+		"/wiki/api/v2/blogposts?spaceId=%s&body-format=storage&limit=250&status=current", spaceID)
 	items, err := FetchAll(ctx, client, path)
 	if err != nil {
 		return nil, fmt.Errorf("fetch blogposts for space %s: %w", spaceID, err)
@@ -236,7 +236,7 @@ func FetchComments(ctx context.Context, client *Client, pageID string) (Comments
 	var c Comments
 
 	footer, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/pages/%s/footer-comments?body-format=view&limit=250", pageID))
+		fmt.Sprintf("/wiki/api/v2/pages/%s/footer-comments?body-format=storage&limit=250", pageID))
 	if err != nil {
 		return c, fmt.Errorf("fetch footer comments for page %s: %w", pageID, err)
 	}
@@ -248,7 +248,7 @@ func FetchComments(ctx context.Context, client *Client, pageID string) (Comments
 	}
 
 	inline, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/pages/%s/inline-comments?body-format=view&limit=250", pageID))
+		fmt.Sprintf("/wiki/api/v2/pages/%s/inline-comments?body-format=storage&limit=250", pageID))
 	if err != nil {
 		return c, fmt.Errorf("fetch inline comments for page %s: %w", pageID, err)
 	}

@@ -69,12 +69,16 @@ func run(args []string) int {
 
 	var client *api.Client
 	if creds.bearer {
-		cloudID, err := api.DiscoverCloudID(creds.token, *domain)
-		if err != nil {
-			slog.Error("cloud ID discovery failed", "err", err)
-			return 1
+		cloudID := creds.cloudID
+		if cloudID == "" {
+			discovered, err := api.DiscoverCloudID(creds.token, *domain)
+			if err != nil {
+				slog.Error("cloud ID discovery failed — set CONFLUENCE_CLOUD_ID to skip auto-discovery", "err", err)
+				return 1
+			}
+			cloudID = discovered
 		}
-		slog.Info("discovered cloud ID", "cloudID", cloudID)
+		slog.Info("using API gateway", "cloudID", cloudID)
 		client = api.NewClientBearer(api.GatewayURL(cloudID), creds.token)
 	} else {
 		client = api.NewClient(*domain, creds.email, creds.token)
