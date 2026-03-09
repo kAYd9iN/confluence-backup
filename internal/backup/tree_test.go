@@ -1,11 +1,26 @@
 package backup_test
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kAYd9iN/confluence-backup/internal/api"
 	"github.com/kAYd9iN/confluence-backup/internal/backup"
 )
+
+func TestBackupDirUsesTimeOwnTimezone(t *testing.T) {
+	// A time that is 2026-03-09 in CET (UTC+1) but 2026-03-08 in UTC.
+	// FormatBackupDir must NOT convert to UTC — it must use the time's own timezone.
+	loc := time.FixedZone("CET", 3600)
+	ts := time.Date(2026, 3, 9, 0, 30, 0, 0, loc)
+
+	dir := backup.FormatBackupDir(ts)
+
+	if !strings.HasPrefix(dir, "2026-03-09") {
+		t.Errorf("expected dir to preserve timezone of input (2026-03-09 CET), got: %s", dir)
+	}
+}
 
 func TestBuildTree_FlatPages(t *testing.T) {
 	pages := []api.Page{

@@ -35,10 +35,17 @@ type Config struct {
 	ToolVersion        string
 }
 
+// FormatBackupDir returns the timestamp-based directory name for a backup.
+// The time is formatted in its own timezone — callers should pass time.Now()
+// which is already in the local timezone, avoiding UTC date mismatches.
+func FormatBackupDir(t time.Time) string {
+	return t.Format("2006-01-02T15-04-05")
+}
+
 // Run executes the full backup and returns the path to the created backup directory.
 func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 	ts := time.Now()
-	backupDir := filepath.Join(cfg.OutputDir, ts.UTC().Format("2006-01-02T15-04-05"))
+	backupDir := filepath.Join(cfg.OutputDir, FormatBackupDir(ts))
 
 	if cfg.DryRun {
 		slog.Info("dry-run mode: no files will be written")
@@ -242,7 +249,7 @@ func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 	// index.html — failure is fatal for this page
 	htmlPath := filepath.Join(dirPath, "index.html")
 	if !cfg.DryRun {
-		if err := w.WriteFile(htmlPath, []byte(page.Body.View.Value)); err != nil {
+		if err := w.WriteFile(htmlPath, []byte(page.Body.Storage.Value)); err != nil {
 			return err
 		}
 		if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
@@ -323,7 +330,7 @@ func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
 func writePost(_ context.Context, _ *api.Client, w *storage.Writer,
 	manifest *Manifest, post api.BlogPost, dirPath string) {
 	htmlPath := filepath.Join(dirPath, "index.html")
-	if err := w.WriteFile(htmlPath, []byte(post.Body.View.Value)); err != nil {
+	if err := w.WriteFile(htmlPath, []byte(post.Body.Storage.Value)); err != nil {
 		slog.Warn("blog post html write failed", "postId", post.ID, "err", err)
 	} else if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
 		slog.Warn("manifest update failed", "path", htmlPath, "err", err)
