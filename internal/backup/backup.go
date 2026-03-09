@@ -35,10 +35,11 @@ type Config struct {
 	ToolVersion        string
 }
 
-// FormatBackupDir returns the timestamp-based directory name for a backup,
-// using the local timezone so the date matches what the operator sees on their system.
+// FormatBackupDir returns the timestamp-based directory name for a backup.
+// The time is formatted in its own timezone — callers should pass time.Now()
+// which is already in the local timezone, avoiding UTC date mismatches.
 func FormatBackupDir(t time.Time) string {
-	return t.Local().Format("2006-01-02T15-04-05")
+	return t.Format("2006-01-02T15-04-05")
 }
 
 // Run executes the full backup and returns the path to the created backup directory.

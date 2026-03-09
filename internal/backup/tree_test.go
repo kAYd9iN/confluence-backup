@@ -9,19 +9,16 @@ import (
 	"github.com/kAYd9iN/confluence-backup/internal/backup"
 )
 
-func TestBackupDirUsesLocalTime(t *testing.T) {
-	// Simulate a time that would be previous day in UTC but current day locally.
-	// e.g. 00:30 CET (UTC+1) = 23:30 UTC previous day.
-	loc := time.FixedZone("CET", 3600) // UTC+1
+func TestBackupDirUsesTimeOwnTimezone(t *testing.T) {
+	// A time that is 2026-03-09 in CET (UTC+1) but 2026-03-08 in UTC.
+	// FormatBackupDir must NOT convert to UTC — it must use the time's own timezone.
+	loc := time.FixedZone("CET", 3600)
 	ts := time.Date(2026, 3, 9, 0, 30, 0, 0, loc)
 
 	dir := backup.FormatBackupDir(ts)
 
 	if !strings.HasPrefix(dir, "2026-03-09") {
-		t.Errorf("expected dir to start with 2026-03-09 (local date), got: %s", dir)
-	}
-	if strings.HasPrefix(dir, "2026-03-08") {
-		t.Errorf("dir must not use UTC date 2026-03-08, got: %s", dir)
+		t.Errorf("expected dir to preserve timezone of input (2026-03-09 CET), got: %s", dir)
 	}
 }
 
