@@ -1,11 +1,29 @@
 package backup_test
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kAYd9iN/confluence-backup/internal/api"
 	"github.com/kAYd9iN/confluence-backup/internal/backup"
 )
+
+func TestBackupDirUsesLocalTime(t *testing.T) {
+	// Simulate a time that would be previous day in UTC but current day locally.
+	// e.g. 00:30 CET (UTC+1) = 23:30 UTC previous day.
+	loc := time.FixedZone("CET", 3600) // UTC+1
+	ts := time.Date(2026, 3, 9, 0, 30, 0, 0, loc)
+
+	dir := backup.FormatBackupDir(ts)
+
+	if !strings.HasPrefix(dir, "2026-03-09") {
+		t.Errorf("expected dir to start with 2026-03-09 (local date), got: %s", dir)
+	}
+	if strings.HasPrefix(dir, "2026-03-08") {
+		t.Errorf("dir must not use UTC date 2026-03-08, got: %s", dir)
+	}
+}
 
 func TestBuildTree_FlatPages(t *testing.T) {
 	pages := []api.Page{

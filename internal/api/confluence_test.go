@@ -61,6 +61,36 @@ func TestFetchPages_DecodesStorageBody(t *testing.T) {
 	}
 }
 
+func TestFetchPages_UsesSpaceScopedEndpoint(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]any{"results": []any{}, "_links": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	api.FetchPages(context.Background(), c, "99")
+	if !strings.HasPrefix(gotPath, "/wiki/api/v2/spaces/99/pages") {
+		t.Errorf("expected space-scoped path /wiki/api/v2/spaces/99/pages, got: %s", gotPath)
+	}
+}
+
+func TestFetchBlogPosts_UsesSpaceScopedEndpoint(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]any{"results": []any{}, "_links": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	api.FetchBlogPosts(context.Background(), c, "99")
+	if !strings.HasPrefix(gotPath, "/wiki/api/v2/spaces/99/blogposts") {
+		t.Errorf("expected space-scoped path /wiki/api/v2/spaces/99/blogposts, got: %s", gotPath)
+	}
+}
+
 func TestFetchPages_UsesStorageBodyFormat(t *testing.T) {
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

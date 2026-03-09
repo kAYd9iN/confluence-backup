@@ -35,10 +35,16 @@ type Config struct {
 	ToolVersion        string
 }
 
+// FormatBackupDir returns the timestamp-based directory name for a backup,
+// using the local timezone so the date matches what the operator sees on their system.
+func FormatBackupDir(t time.Time) string {
+	return t.Local().Format("2006-01-02T15-04-05")
+}
+
 // Run executes the full backup and returns the path to the created backup directory.
 func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 	ts := time.Now()
-	backupDir := filepath.Join(cfg.OutputDir, ts.UTC().Format("2006-01-02T15-04-05"))
+	backupDir := filepath.Join(cfg.OutputDir, FormatBackupDir(ts))
 
 	if cfg.DryRun {
 		slog.Info("dry-run mode: no files will be written")
