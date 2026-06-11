@@ -1,0 +1,55 @@
+name: auto-release
+
+# Closes the self-update loop: when an api-drift PR (created by the daily
+# api-update-check) is merged, bump the 0ver minor version and push the tag,
+# which triggers the release workflow (including its security gate).
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'api-drift')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          # REPO_PAT is required here: tags pushed with the default GITHUB_TOKEN
+          # do not trigger the release workflow (GitHub recursion guard).
+          token: ${{ secrets.REPO_PAT || github.token }}
+          persist-credentials: true
+
+      - name: Bump 0ver minor version and push tag
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_PAT: ${{ secrets.REPO_PAT != '' }}
+        run: |
+          set -euo pipefail
+          LATEST=$(git tag -l 'v0.*' --sort=-v:refname | head -1)
+          LATEST="${LATEST:-v0.0.0}"
+          MINOR=$(echo "$LATEST" | cut -d. -f2)
+          NEXT="v0.$((MINOR + 1)).0"
+          echo "Bumping ${LATEST} -> ${NEXT}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEXT" -m "Automated release after API drift adaptation (PR #${{ github.event.pull_request.number }})"
+          git push origin "$NEXT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+          if [ "$HAS_PAT" != "true" ]; then
+            gh issue create \
+              --title "Manual release trigger needed for ${NEXT}" \
+              --label "api-drift" \
+              --body "Tag \`${NEXT}\` was pushed with the default GITHUB_TOKEN, which does not trigger the release workflow. Re-push the tag manually or configure the \`REPO_PAT\` secret: \`git push origin :refs/tags/${NEXT} && git push origin ${NEXT}\` (after re-tagging locally)."
+          fi

@@ -66,10 +66,32 @@ hierarchical directory structure with HMAC-SHA-256 signed manifest.
 - Versioning: 0ver — v0.1.0, v0.2.0, ... (https://0ver.org/)
 - go.mod: go 1.25.8 / CI go-version: '1.26' — do not change
 
+## Self-Update Loop (API drift)
+
+```
+api-update-check (daily 06:00 UTC)
+  → drift detected → Claude adapts internal/api/confluence.go (needs ANTHROPIC_API_KEY)
+  → PR with label api-drift (auto-merge only if snapshot-only;
+    Go code changes always require human review — prompt-injection guard)
+  → merge → auto-release bumps 0ver minor + pushes tag
+  → release workflow: security-gate (govulncheck, gosec, race tests,
+    blocks while issues labeled `security` are open) → build → signed release
+```
+
+- Baseline: `docs/api-snapshot.json` — committed via PR on first successful run
+- Script supports Basic Auth (set `CI_CONFLUENCE_EMAIL` var for ATATT tokens) or Bearer (ATSTT)
+- Exit 2 (all endpoints unreachable) fails the job instead of writing an empty baseline
+
 ## Pending Manual Steps
 
 - Set SCORECARD_TOKEN secret (PAT with repo + read:org)
 - Set COMMIT_SIGNING_PUBLIC_KEY secret (GPG key)
+- Set CI_CONFLUENCE_TOKEN secret (read-only token for the daily API drift check)
+- Set CI_CONFLUENCE_EMAIL variable (only for ATATT personal tokens — Basic Auth)
+- Set ANTHROPIC_API_KEY secret (enables automatic code adaptation on API drift)
+- Set REPO_PAT secret (PAT with repo scope — lets drift PRs trigger CI and
+  auto-release tags trigger the release workflow)
+- Enable "Allow auto-merge" in repo settings (drift PRs merge once CI is green)
 
 ## Extending: Adding a New Data Type
 

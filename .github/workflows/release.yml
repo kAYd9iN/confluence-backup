@@ -12,8 +12,55 @@ permissions:
   attestations: write
 
 jobs:
+  # Security gate: every release runs the full security check suite AND is
+  # blocked while any issue labeled `security` is still open. The build jobs
+  # only start once this gate passes.
+  security-gate:
+    name: Security gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      - name: gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.24.7 -quiet ./...
+
+      - name: Unit tests (race detector)
+        run: go test -race -cover ./...
+
+      - name: Block release on open security findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --label security --state open --json number,title --jq 'length')
+          if [ "$OPEN" -gt 0 ]; then
+            echo "::error::Release blocked — $OPEN open security issue(s):"
+            gh issue list --repo "$GITHUB_REPOSITORY" --label security --state open
+            exit 1
+          fi
+          echo "No open security issues — release approved."
+
   build:
     name: Build ${{ matrix.artifact }}
+    needs: security-gate
     strategy:
       matrix:
         include:

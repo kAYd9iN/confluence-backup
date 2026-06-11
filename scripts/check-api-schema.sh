@@ -5,26 +5,40 @@
 # Writes the result to docs/api-snapshot.json.
 #
 # Usage (local):
-#   CONFLUENCE_TOKEN=<PAT> CONFLUENCE_DOMAIN=myorg.atlassian.net ./scripts/check-api-schema.sh
+#   # Personal account (Basic Auth, ATATT token):
+#   CONFLUENCE_EMAIL=user@example.com CONFLUENCE_TOKEN=<ATATT...> \
+#     CONFLUENCE_DOMAIN=myorg.atlassian.net ./scripts/check-api-schema.sh
+#   # Service account (Bearer, ATSTT token):
+#   CONFLUENCE_TOKEN=<ATSTT...> CONFLUENCE_DOMAIN=myorg.atlassian.net ./scripts/check-api-schema.sh
 #
 # Exit codes:
 #   0 — no drift (or snapshot just created)
 #   1 — drift detected (CI should open an issue)
+#   2 — all endpoints unreachable (auth/network problem) — no snapshot written
 
 set -euo pipefail
 
 TOKEN="${CONFLUENCE_TOKEN:?CONFLUENCE_TOKEN must be set}"
 DOMAIN="${CONFLUENCE_DOMAIN:?CONFLUENCE_DOMAIN must be set}"
+EMAIL="${CONFLUENCE_EMAIL:-}"
 BASE="https://${DOMAIN}"
 SNAPSHOT="docs/api-snapshot.json"
 TMPFILE="$(mktemp)"
 trap 'rm -f "$TMPFILE"' EXIT
 
+# Confluence Cloud: personal ATATT tokens require Basic Auth (email:token);
+# Bearer only works for service-account ATSTT tokens (see issue #24).
+if [[ -n "$EMAIL" ]]; then
+  AUTH_ARGS=(-u "${EMAIL}:${TOKEN}")
+else
+  AUTH_ARGS=(-H "Authorization: Bearer ${TOKEN}")
+fi
+
 fetch_keys() {
   local path="$1"
   local response
   response=$(curl -sf \
-    -H "Authorization: Bearer ${TOKEN}" \
+    "${AUTH_ARGS[@]}" \
     -H "Accept: application/json" \
     --max-time 15 \
     "${BASE}${path}") || { echo "WARN: ${BASE}${path} returned error — skipping" >&2; echo "[]"; return; }
@@ -54,6 +68,14 @@ for name in "${!PATHS[@]}"; do
   ENDPOINTS_JSON=$(echo "$ENDPOINTS_JSON" | jq --arg n "$name" --argjson k "$keys" '.[$n] = $k')
   echo "  $name: $(echo "$keys" | jq -r 'length') fields" >&2
 done
+
+# If every endpoint failed (auth or network problem), do not write a bogus
+# empty baseline — that would mask real drift and corrupt drift detection.
+NONEMPTY=$(echo "$ENDPOINTS_JSON" | jq '[.[] | select(length > 0)] | length')
+if [[ "$NONEMPTY" -eq 0 ]]; then
+  echo "ERROR: all endpoints unreachable — check token/auth mode (CONFLUENCE_EMAIL for ATATT tokens)." >&2
+  exit 2
+fi
 
 NEW_SNAPSHOT=$(jq -n \
   --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
