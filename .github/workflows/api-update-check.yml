@@ -2,24 +2,30 @@ name: api-update-check
 
 on:
   schedule:
-    - cron: '0 6 * * 1'  # every Monday 06:00 UTC
+    - cron: '0 6 * * *'  # daily 06:00 UTC
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: write
+  pull-requests: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
     # Gate only on the variable — secrets cannot be accessed in job-level if conditions.
-    # If CONFLUENCE_DOMAIN is set but CONFLUENCE_TOKEN is missing, the step fails visibly.
+    # If CONFLUENCE_DOMAIN is set but CI_CONFLUENCE_TOKEN is missing, the step fails visibly.
     if: ${{ vars.CONFLUENCE_DOMAIN != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          persist-credentials: false
+          # Credentials must persist — this job pushes the drift branch.
+          # REPO_PAT (optional): pushing the drift branch with a PAT lets CI run
+          # on the auto-created PR. With the default GITHUB_TOKEN, workflows are
+          # not triggered on pushes made by workflows (GitHub recursion guard).
+          persist-credentials: true
+          token: ${{ secrets.REPO_PAT || github.token }}
 
       - name: Check API schema
         id: check
@@ -27,34 +33,133 @@ jobs:
           # CI_CONFLUENCE_TOKEN should be a read-only token scoped to the minimum
           # required API endpoints — distinct from the full-backup CONFLUENCE_TOKEN.
           CONFLUENCE_TOKEN: ${{ secrets.CI_CONFLUENCE_TOKEN }}
+          CONFLUENCE_EMAIL: ${{ vars.CI_CONFLUENCE_EMAIL }}
           CONFLUENCE_DOMAIN: ${{ vars.CONFLUENCE_DOMAIN }}
         run: |
           set +e
           bash scripts/check-api-schema.sh
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -gt 1 ]; then
+            echo "::error::check-api-schema.sh failed with exit code $code (API unreachable or token invalid)"
+            exit "$code"
+          fi
+          # Detect a freshly created baseline (first run: script writes the
+          # snapshot and exits 0 — it must be committed to become the baseline).
+          if ! git diff --quiet -- docs/api-snapshot.json || \
+             [ -n "$(git status --porcelain docs/api-snapshot.json)" ]; then
+            echo "snapshot_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "snapshot_changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Open issue on drift
-        if: steps.check.outputs.exit_code == '1'
+      - name: Detect Anthropic API key
+        id: anthropic
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_DATE: ${{ github.run_id }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          DIFF=$(cat drift.diff 2>/dev/null || echo "(diff unavailable)")
-          TIMESTAMP=$(date -u +%Y-%m-%d)
-          gh issue create \
-            --title "Confluence API drift detected (${TIMESTAMP})" \
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Go
+        if: steps.check.outputs.exit_code == '1'
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
+        with:
+          go-version: '1.26'
+          cache: true
+
+      # On drift: let Claude adapt the tool to the API changes (new/removed
+      # fields → internal/api/confluence.go structs + fetch functions), then
+      # the verification step below runs the full test suite.
+      - name: Adapt tool to API changes (Claude)
+        if: steps.check.outputs.exit_code == '1' && steps.anthropic.outputs.present == 'true'
+        uses: anthropics/claude-code-action@0f97b95b6536c26e5f6bd90faec370d41695beca  # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            The daily Confluence API schema check detected drift. The diff between
+            the stored baseline and the live API is in `drift.diff` (already in the
+            working tree), and `docs/api-snapshot.json` has been updated to the new
+            schema.
+
+            Adapt the tool to the API changes:
+            1. Read `drift.diff` to see which top-level fields were added/removed
+               per endpoint (spaces, pages, blogposts).
+            2. Update the corresponding structs and fetch functions in
+               `internal/api/confluence.go` so newly added fields are backed up
+               and removed fields no longer break parsing.
+            3. Follow the conventions in CLAUDE.md ("Extending: Adding a New Data Type").
+            4. Run `go test ./...` and fix any failures you introduced.
+            Do NOT commit — the workflow commits for you. Do NOT modify workflows,
+            scripts, or anything outside internal/ and docs/api-snapshot.json.
+          claude_args: '--max-turns 30'
+
+      - name: Verify build and tests after adaptation
+        if: steps.check.outputs.exit_code == '1'
+        run: |
+          go build -mod=vendor ./...
+          go test -race -cover ./...
+
+      - name: Create pull request (drift or new baseline)
+        if: steps.check.outputs.exit_code == '1' || steps.check.outputs.snapshot_changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.REPO_PAT || github.token }}
+          DRIFT: ${{ steps.check.outputs.exit_code }}
+          CLAUDE_RAN: ${{ steps.anthropic.outputs.present }}
+        run: |
+          set -euo pipefail
+          BRANCH="api-drift/$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs/api-snapshot.json internal/
+
+          if [ "$DRIFT" = "1" ]; then
+            TITLE="fix: adapt to Confluence API drift ($(date -u +%Y-%m-%d))"
+          else
+            TITLE="chore: commit initial API schema baseline"
+          fi
+          git commit -m "$TITLE"
+          git push origin "$BRANCH"
+
+          {
+            echo "## Confluence API schema update"
+            echo
+            if [ "$DRIFT" = "1" ]; then
+              echo "The daily API schema check found drift against the stored baseline."
+              if [ "$CLAUDE_RAN" = "true" ]; then
+                echo "Claude adapted \`internal/api/confluence.go\` to the changes; build and race tests passed."
+              else
+                echo "**No ANTHROPIC_API_KEY configured** — only the snapshot was updated."
+                echo "Review whether \`internal/api/confluence.go\` needs changes for the new fields."
+              fi
+              echo
+              echo '### Drift'
+              echo '```diff'
+              cat drift.diff 2>/dev/null || echo "(diff unavailable)"
+              echo '```'
+            else
+              echo "First run: committing \`docs/api-snapshot.json\` as the drift-detection baseline."
+            fi
+            echo
+            echo "Merging this PR triggers the auto-release workflow (api-drift label)."
+          } > pr-body.md
+
+          gh pr create \
+            --title "$TITLE" \
             --label "api-drift" \
-            --body "$(cat <<'BODY'
-          ## Confluence API drift detected
+            --body-file pr-body.md
 
-          The weekly API schema check found differences between the stored baseline
-          (`docs/api-snapshot.json`) and the current Confluence Cloud API responses.
-
-          ### Next steps
-
-          1. Review which fields were added or removed
-          2. Update `internal/api/confluence.go` if new fields should be backed up
-          3. Update `docs/api-snapshot.json` by running `scripts/check-api-schema.sh` locally
-          4. Commit the updated snapshot to close this issue
-          BODY
-          )"
+          # Auto-merge only for snapshot-only PRs. If Claude changed Go code,
+          # require a human review — drift.diff is derived from Confluence API
+          # responses (untrusted input for the adaptation prompt), so code
+          # changes must not reach main unreviewed.
+          if git diff --name-only HEAD~1 HEAD | grep -q '^internal/'; then
+            echo "::notice::Code changes included — skipping auto-merge, human review required."
+          else
+            gh pr merge "$BRANCH" --auto --squash || \
+              echo "::notice::Auto-merge not enabled — PR requires manual merge."
+          fi

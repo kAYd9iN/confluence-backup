@@ -10,3 +10,8 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+# compiled binaries
+/backup
+/confluence-backup
+*.exe
