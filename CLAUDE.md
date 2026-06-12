@@ -84,8 +84,7 @@ api-update-check (daily 06:00 UTC — no credentials needed)
   definition is identical for every Confluence Cloud instance, so no instance,
   domain, or token is required
 - Baseline: `docs/api-snapshot.json` (committed); sentinel `__ENDPOINT_MISSING__`
-  marks endpoints the tool calls that are no longer documented (currently:
-  templates_v1, space_property_v1 — candidates for v2 migration)
+  marks endpoints the tool calls that are no longer documented (currently: none)
 - Exit 2 (spec download failed) fails the job; no snapshot is written
 
 ## Pending Manual Steps

@@ -159,8 +159,7 @@ func FetchSpaces(ctx context.Context, client *Client) ([]Space, error) {
 	return spaces, nil
 }
 
-// FetchSpaceDetail fetches permissions and properties for one space.
-// Uses both v2 (permissions) and v1 (properties) APIs.
+// FetchSpaceDetail fetches permissions and properties for one space (v2 API).
 func FetchSpaceDetail(ctx context.Context, client *Client, space Space) (SpaceDetail, error) {
 	detail := SpaceDetail{Space: space}
 
@@ -177,15 +176,15 @@ func FetchSpaceDetail(ctx context.Context, client *Client, space Space) (SpaceDe
 		}
 	}
 
-	// Properties (v1 — not yet in v2)
-	propBody, err := client.Get(ctx,
-		fmt.Sprintf("/wiki/rest/api/space/%s/property?expand=value,version&limit=200", space.Key))
+	// Properties (v2)
+	propItems, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/properties?limit=250", space.ID))
 	if err == nil {
-		var resp struct {
-			Results []SpaceProperty `json:"results"`
-		}
-		if json.Unmarshal(propBody, &resp) == nil {
-			detail.Properties = resp.Results
+		for _, raw := range propItems {
+			var p SpaceProperty
+			if json.Unmarshal(raw, &p) == nil {
+				detail.Properties = append(detail.Properties, p)
+			}
 		}
 	}
 	// Properties fetch failure is non-fatal — continue without them.
@@ -279,20 +278,26 @@ func FetchAttachmentMeta(ctx context.Context, client *Client, pageID string) ([]
 	return atts, nil
 }
 
-// FetchTemplates returns space-level templates (v1 API).
+// FetchTemplates returns space-level content and blueprint templates (v1 API).
+// The combined /wiki/rest/api/template endpoint is no longer documented;
+// /template/page and /template/blueprint replace it.
 func FetchTemplates(ctx context.Context, client *Client, spaceKey string) ([]Template, error) {
-	body, err := client.Get(ctx,
-		fmt.Sprintf("/wiki/rest/api/template?spaceKey=%s&limit=200", spaceKey))
-	if err != nil {
-		return nil, fmt.Errorf("fetch templates for space %s: %w", spaceKey, err)
+	var all []Template
+	for _, kind := range []string{"page", "blueprint"} {
+		body, err := client.Get(ctx,
+			fmt.Sprintf("/wiki/rest/api/template/%s?spaceKey=%s&limit=200", kind, spaceKey))
+		if err != nil {
+			return all, fmt.Errorf("fetch %s templates for space %s: %w", kind, spaceKey, err)
+		}
+		var resp struct {
+			Results []Template `json:"results"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return all, fmt.Errorf("parse %s templates for space %s: %w", kind, spaceKey, err)
+		}
+		all = append(all, resp.Results...)
 	}
-	var resp struct {
-		Results []Template `json:"results"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse templates: %w", err)
-	}
-	return resp.Results, nil
+	return all, nil
 }
 
 // FetchUserProfile fetches a single user profile by account ID (v1 API).

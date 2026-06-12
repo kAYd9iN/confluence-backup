@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-12T15:10:37Z",
+  "generated": "2026-06-12T15:31:52Z",
   "sources": {
     "v2": {
       "url": "openapi-v2.v3.json",
@@ -82,8 +82,13 @@
       "operation",
       "principal"
     ],
-    "space_property_v1": [
-      "__ENDPOINT_MISSING__"
+    "space_properties": [
+      "createdAt",
+      "createdBy",
+      "id",
+      "key",
+      "value",
+      "version"
     ],
     "spaces": [
       "_links",
@@ -99,8 +104,33 @@
       "status",
       "type"
     ],
-    "templates_v1": [
-      "__ENDPOINT_MISSING__"
+    "templates_blueprint_v1": [
+      "_expandable",
+      "_links",
+      "body",
+      "description",
+      "editorVersion",
+      "labels",
+      "name",
+      "originalTemplate",
+      "referencingBlueprint",
+      "space",
+      "templateId",
+      "templateType"
+    ],
+    "templates_page_v1": [
+      "_expandable",
+      "_links",
+      "body",
+      "description",
+      "editorVersion",
+      "labels",
+      "name",
+      "originalTemplate",
+      "referencingBlueprint",
+      "space",
+      "templateId",
+      "templateType"
     ],
     "user_v1": [
       "_expandable",

@@ -82,8 +82,9 @@ ENDPOINTS = {
     "page_attachments":      ("v2", "/pages/{id}/attachments"),
     "page_footer_comments":  ("v2", "/pages/{id}/footer-comments"),
     "page_inline_comments":  ("v2", "/pages/{id}/inline-comments"),
-    "space_property_v1":     ("v1", "/wiki/rest/api/space/{spaceKey}/property"),
-    "templates_v1":          ("v1", "/wiki/rest/api/template"),
+    "space_properties":      ("v2", "/spaces/{space-id}/properties"),
+    "templates_page_v1":     ("v1", "/wiki/rest/api/template/page"),
+    "templates_blueprint_v1": ("v1", "/wiki/rest/api/template/blueprint"),
     "user_v1":               ("v1", "/wiki/rest/api/user"),
 }
 
