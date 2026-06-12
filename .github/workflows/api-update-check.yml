@@ -13,9 +13,6 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Gate only on the variable — secrets cannot be accessed in job-level if conditions.
-    # If CONFLUENCE_DOMAIN is set but CI_CONFLUENCE_TOKEN is missing, the step fails visibly.
-    if: ${{ vars.CONFLUENCE_DOMAIN != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -27,21 +24,17 @@ jobs:
           persist-credentials: true
           token: ${{ secrets.REPO_PAT || github.token }}
 
+      # The check compares Atlassian's published OpenAPI specs against the
+      # committed baseline — no Confluence instance or credentials needed.
       - name: Check API schema
         id: check
-        env:
-          # CI_CONFLUENCE_TOKEN should be a read-only token scoped to the minimum
-          # required API endpoints — distinct from the full-backup CONFLUENCE_TOKEN.
-          CONFLUENCE_TOKEN: ${{ secrets.CI_CONFLUENCE_TOKEN }}
-          CONFLUENCE_EMAIL: ${{ vars.CI_CONFLUENCE_EMAIL }}
-          CONFLUENCE_DOMAIN: ${{ vars.CONFLUENCE_DOMAIN }}
         run: |
           set +e
           bash scripts/check-api-schema.sh
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" -gt 1 ]; then
-            echo "::error::check-api-schema.sh failed with exit code $code (API unreachable or token invalid)"
+            echo "::error::check-api-schema.sh failed with exit code $code (spec download failed)"
             exit "$code"
           fi
           # Detect a freshly created baseline (first run: script writes the
@@ -53,12 +46,13 @@ jobs:
             echo "snapshot_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Detect Anthropic API key
+      - name: Detect Claude credentials
         id: anthropic
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -n "$ANTHROPIC_API_KEY" ]; then
+          if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -78,16 +72,18 @@ jobs:
         if: steps.check.outputs.exit_code == '1' && steps.anthropic.outputs.present == 'true'
         uses: anthropics/claude-code-action@0f97b95b6536c26e5f6bd90faec370d41695beca  # v1
         with:
+          # Either secret works: ANTHROPIC_API_KEY (Console/pay-per-token) or
+          # CLAUDE_CODE_OAUTH_TOKEN (Pro/Max subscription via `claude setup-token`).
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            The daily Confluence API schema check detected drift. The diff between
-            the stored baseline and the live API is in `drift.diff` (already in the
-            working tree), and `docs/api-snapshot.json` has been updated to the new
-            schema.
+            The daily Confluence API schema check detected drift between Atlassian's
+            published OpenAPI spec and the stored baseline. The diff is in
+            `drift.diff` (already in the working tree), and `docs/api-snapshot.json`
+            has been updated to the new schema.
 
             Adapt the tool to the API changes:
-            1. Read `drift.diff` to see which top-level fields were added/removed
-               per endpoint (spaces, pages, blogposts).
+            1. Read `drift.diff` to see which fields/endpoints were added or removed.
             2. Update the corresponding structs and fetch functions in
                `internal/api/confluence.go` so newly added fields are backed up
                and removed fields no longer break parsing.
@@ -133,7 +129,7 @@ jobs:
               if [ "$CLAUDE_RAN" = "true" ]; then
                 echo "Claude adapted \`internal/api/confluence.go\` to the changes; build and race tests passed."
               else
-                echo "**No ANTHROPIC_API_KEY configured** — only the snapshot was updated."
+                echo "**No Claude credentials configured** (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN) — only the snapshot was updated."
                 echo "Review whether \`internal/api/confluence.go\` needs changes for the new fields."
               fi
               echo

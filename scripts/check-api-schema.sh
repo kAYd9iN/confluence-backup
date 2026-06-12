@@ -1,97 +1,116 @@
 #!/usr/bin/env bash
 # check-api-schema.sh
 #
-# Hits Confluence Cloud API endpoints and extracts top-level JSON field names.
-# Writes the result to docs/api-snapshot.json.
+# Compares Atlassian's *published* Confluence Cloud OpenAPI specs against the
+# stored baseline (docs/api-snapshot.json). The API definition is identical
+# for every Confluence Cloud instance, so no instance, credentials, or
+# tokens are required — the check runs entirely against public documentation.
 #
-# Usage (local):
-#   # Personal account (Basic Auth, ATATT token):
-#   CONFLUENCE_EMAIL=user@example.com CONFLUENCE_TOKEN=<ATATT...> \
-#     CONFLUENCE_DOMAIN=myorg.atlassian.net ./scripts/check-api-schema.sh
-#   # Service account (Bearer, ATSTT token):
-#   CONFLUENCE_TOKEN=<ATSTT...> CONFLUENCE_DOMAIN=myorg.atlassian.net ./scripts/check-api-schema.sh
+# Tracked: every endpoint the tool actually calls (see internal/api/confluence.go).
+# Sentinel values in the snapshot:
+#   __ENDPOINT_MISSING__   — endpoint no longer documented (removed/deprecated)
+#   __SCHEMA_UNPARSEABLE__ — response schema shape changed beyond recognition
+#
+# Usage (local): ./scripts/check-api-schema.sh
 #
 # Exit codes:
-#   0 — no drift (or snapshot just created)
-#   1 — drift detected (CI should open an issue)
-#   2 — all endpoints unreachable (auth/network problem) — no snapshot written
+#   0 — no drift (or baseline just created)
+#   1 — drift detected (CI opens a PR)
+#   2 — spec download failed (network problem) — no snapshot written
 
 set -euo pipefail
 
-TOKEN="${CONFLUENCE_TOKEN:?CONFLUENCE_TOKEN must be set}"
-DOMAIN="${CONFLUENCE_DOMAIN:?CONFLUENCE_DOMAIN must be set}"
-EMAIL="${CONFLUENCE_EMAIL:-}"
-BASE="https://${DOMAIN}"
 SNAPSHOT="docs/api-snapshot.json"
-TMPFILE="$(mktemp)"
-trap 'rm -f "$TMPFILE"' EXIT
+UA="confluence-backup-api-check (+https://github.com/kAYd9iN/confluence-backup)"
+V2_URL="https://dac-static.atlassian.com/cloud/confluence/openapi-v2.v3.json"
+V1_URL="https://dac-static.atlassian.com/cloud/confluence/swagger.v3.json"
 
-# Confluence Cloud: personal ATATT tokens require Basic Auth (email:token);
-# Bearer only works for service-account ATSTT tokens (see issue #24).
-if [[ -n "$EMAIL" ]]; then
-  AUTH_ARGS=(-u "${EMAIL}:${TOKEN}")
-else
-  AUTH_ARGS=(-H "Authorization: Bearer ${TOKEN}")
-fi
+# Pick a python that actually runs (on Windows, `python3` may resolve to the
+# Microsoft Store alias stub, which only prints an install hint).
+PYTHON=""
+for candidate in python3 python; do
+  if "$candidate" -c "pass" >/dev/null 2>&1; then PYTHON="$candidate"; break; fi
+done
+[[ -n "$PYTHON" ]] || { echo "ERROR: no working python3 found" >&2; exit 2; }
 
-fetch_keys() {
-  local path="$1"
-  local response
-  response=$(curl -sf \
-    "${AUTH_ARGS[@]}" \
-    -H "Accept: application/json" \
-    --max-time 15 \
-    "${BASE}${path}") || { echo "WARN: ${BASE}${path} returned error — skipping" >&2; echo "[]"; return; }
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
 
-  # Confluence v2 list endpoints return { "results": [...], "_links": {...} }
-  # Extract keys from the first result item, or top-level keys for non-list responses.
-  echo "$response" | jq -r '
-    if .results | type == "array" and length > 0 then
-      .results[0] | keys
-    else
-      keys
-    end
-  ' 2>/dev/null || echo "[]"
+echo "Fetching published Confluence Cloud OpenAPI specs..." >&2
+# dac-static.atlassian.com rejects requests without a User-Agent header.
+curl -sf -A "$UA" --max-time 60 "$V2_URL" -o "$WORKDIR/v2.json" \
+  || { echo "ERROR: failed to download v2 spec ($V2_URL)" >&2; exit 2; }
+curl -sf -A "$UA" --max-time 60 "$V1_URL" -o "$WORKDIR/v1.json" \
+  || { echo "ERROR: failed to download v1 spec ($V1_URL)" >&2; exit 2; }
+
+"$PYTHON" - "$WORKDIR/v2.json" "$WORKDIR/v1.json" > "$WORKDIR/snapshot.json" <<'PY'
+import json, sys, datetime
+
+v2 = json.load(open(sys.argv[1], encoding="utf-8"))
+v1 = json.load(open(sys.argv[2], encoding="utf-8"))
+
+def deref(spec, obj, depth=0):
+    while isinstance(obj, dict) and "$ref" in obj and depth < 30:
+        target = spec
+        for part in obj["$ref"].lstrip("#/").split("/"):
+            target = target[part]
+        obj = target
+        depth += 1
+    return obj
+
+def fields(spec, path):
+    item = spec.get("paths", {}).get(path)
+    if not item or "get" not in item:
+        return ["__ENDPOINT_MISSING__"]
+    try:
+        schema = deref(spec, item["get"]["responses"]["200"]["content"]["application/json"]["schema"])
+        props = schema.get("properties", {})
+        # List endpoints wrap items in {results: [...], _links: {...}}
+        if "results" in props:
+            items = deref(spec, deref(spec, props["results"]).get("items", {}))
+            props = items.get("properties", {})
+        return sorted(props.keys()) or ["__SCHEMA_UNPARSEABLE__"]
+    except (KeyError, TypeError):
+        return ["__SCHEMA_UNPARSEABLE__"]
+
+# Every endpoint internal/api/confluence.go calls, mapped to its spec path.
+ENDPOINTS = {
+    "spaces":                ("v2", "/spaces"),
+    "space_pages":           ("v2", "/spaces/{id}/pages"),
+    "space_blogposts":       ("v2", "/spaces/{id}/blogposts"),
+    "space_permissions":     ("v2", "/spaces/{id}/permissions"),
+    "page_attachments":      ("v2", "/pages/{id}/attachments"),
+    "page_footer_comments":  ("v2", "/pages/{id}/footer-comments"),
+    "page_inline_comments":  ("v2", "/pages/{id}/inline-comments"),
+    "space_property_v1":     ("v1", "/wiki/rest/api/space/{spaceKey}/property"),
+    "templates_v1":          ("v1", "/wiki/rest/api/template"),
+    "user_v1":               ("v1", "/wiki/rest/api/user"),
 }
 
-declare -A PATHS=(
-  [spaces]="/wiki/api/v2/spaces?limit=1"
-  [pages]="/wiki/api/v2/pages?limit=1"
-  [blogposts]="/wiki/api/v2/blogposts?limit=1"
-)
+specs = {"v2": v2, "v1": v1}
+endpoints = {name: fields(specs[ver], path) for name, (ver, path) in sorted(ENDPOINTS.items())}
 
-echo "Fetching API schema from Confluence Cloud (${DOMAIN})..." >&2
-
-ENDPOINTS_JSON="{}"
-for name in "${!PATHS[@]}"; do
-  keys=$(fetch_keys "${PATHS[$name]}")
-  ENDPOINTS_JSON=$(echo "$ENDPOINTS_JSON" | jq --arg n "$name" --argjson k "$keys" '.[$n] = $k')
-  echo "  $name: $(echo "$keys" | jq -r 'length') fields" >&2
-done
-
-# If every endpoint failed (auth or network problem), do not write a bogus
-# empty baseline — that would mask real drift and corrupt drift detection.
-NONEMPTY=$(echo "$ENDPOINTS_JSON" | jq '[.[] | select(length > 0)] | length')
-if [[ "$NONEMPTY" -eq 0 ]]; then
-  echo "ERROR: all endpoints unreachable — check token/auth mode (CONFLUENCE_EMAIL for ATATT tokens)." >&2
-  exit 2
-fi
-
-NEW_SNAPSHOT=$(jq -n \
-  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --argjson ep "$ENDPOINTS_JSON" \
-  '{"generated": $ts, "endpoints": $ep | to_entries | sort_by(.key) | from_entries}')
-
-echo "$NEW_SNAPSHOT" > "$TMPFILE"
+print(json.dumps({
+    "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "sources": {
+        "v2": {"url": "openapi-v2.v3.json", "version": v2.get("info", {}).get("version", "?")},
+        "v1": {"url": "swagger.v3.json", "version": v1.get("info", {}).get("version", "?")},
+    },
+    "endpoints": endpoints,
+}, indent=2))
+PY
 
 if [[ ! -f "$SNAPSHOT" ]]; then
-  cp "$TMPFILE" "$SNAPSHOT"
+  cp "$WORKDIR/snapshot.json" "$SNAPSHOT"
   echo "Snapshot created at $SNAPSHOT — no baseline existed yet." >&2
   exit 0
 fi
 
-OLD_EP=$(jq '.endpoints' "$SNAPSHOT")
-NEW_EP=$(jq '.endpoints' "$TMPFILE")
+extract_endpoints() {
+  "$PYTHON" -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding='utf-8'))['endpoints'], indent=2, sort_keys=True))" "$1"
+}
+OLD_EP=$(extract_endpoints "$SNAPSHOT")
+NEW_EP=$(extract_endpoints "$WORKDIR/snapshot.json")
 
 if [[ "$OLD_EP" == "$NEW_EP" ]]; then
   echo "No API drift detected." >&2
@@ -99,7 +118,10 @@ if [[ "$OLD_EP" == "$NEW_EP" ]]; then
 fi
 
 echo "API DRIFT DETECTED:" >&2
-diff <(echo "$OLD_EP" | jq -S .) <(echo "$NEW_EP" | jq -S .) >&2 || true
-diff <(echo "$OLD_EP" | jq -S .) <(echo "$NEW_EP" | jq -S .) > drift.diff || true
+diff <(echo "$OLD_EP") <(echo "$NEW_EP") >&2 || true
+diff <(echo "$OLD_EP") <(echo "$NEW_EP") > drift.diff || true
+
+# Update the snapshot in place — CI commits it as part of the drift PR.
+cp "$WORKDIR/snapshot.json" "$SNAPSHOT"
 
 exit 1
