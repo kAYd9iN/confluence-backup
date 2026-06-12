@@ -69,8 +69,10 @@ hierarchical directory structure with HMAC-SHA-256 signed manifest.
 ## Self-Update Loop (API drift)
 
 ```
-api-update-check (daily 06:00 UTC)
-  → drift detected → Claude adapts internal/api/confluence.go (needs ANTHROPIC_API_KEY)
+api-update-check (daily 06:00 UTC — no credentials needed)
+  → compares Atlassian's PUBLISHED OpenAPI specs against docs/api-snapshot.json
+  → drift detected → Claude adapts internal/api/confluence.go
+    (needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
   → PR with label api-drift (auto-merge only if snapshot-only;
     Go code changes always require human review — prompt-injection guard)
   → merge → auto-release bumps 0ver minor + pushes tag
@@ -78,20 +80,23 @@ api-update-check (daily 06:00 UTC)
     blocks while issues labeled `security` are open) → build → signed release
 ```
 
-- Baseline: `docs/api-snapshot.json` — committed via PR on first successful run
-- Script supports Basic Auth (set `CI_CONFLUENCE_EMAIL` var for ATATT tokens) or Bearer (ATSTT)
-- Exit 2 (all endpoints unreachable) fails the job instead of writing an empty baseline
+- The check uses Atlassian's public spec (dac-static.atlassian.com) — the API
+  definition is identical for every Confluence Cloud instance, so no instance,
+  domain, or token is required
+- Baseline: `docs/api-snapshot.json` (committed); sentinel `__ENDPOINT_MISSING__`
+  marks endpoints the tool calls that are no longer documented (currently:
+  templates_v1, space_property_v1 — candidates for v2 migration)
+- Exit 2 (spec download failed) fails the job; no snapshot is written
 
 ## Pending Manual Steps
 
-- Set SCORECARD_TOKEN secret (PAT with repo + read:org)
+- Set SCORECARD_TOKEN secret (optional — only improves Branch-Protection check)
 - Set COMMIT_SIGNING_PUBLIC_KEY secret (GPG key)
-- Set CI_CONFLUENCE_TOKEN secret (read-only token for the daily API drift check)
-- Set CI_CONFLUENCE_EMAIL variable (only for ATATT personal tokens — Basic Auth)
-- Set ANTHROPIC_API_KEY secret (enables automatic code adaptation on API drift)
-- Set REPO_PAT secret (PAT with repo scope — lets drift PRs trigger CI and
-  auto-release tags trigger the release workflow)
-- Enable "Allow auto-merge" in repo settings (drift PRs merge once CI is green)
+- Set ANTHROPIC_API_KEY secret **or** CLAUDE_CODE_OAUTH_TOKEN secret (Pro/Max
+  subscription via `claude setup-token`) — enables automatic code adaptation on drift
+- Set REPO_PAT secret (PAT with repo + workflow scope — lets drift PRs trigger CI
+  and auto-release tags trigger the release workflow)
+- Enable "Allow auto-merge" in repo settings (snapshot-only drift PRs merge once CI is green)
 
 ## Extending: Adding a New Data Type
 

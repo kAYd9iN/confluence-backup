@@ -1,0 +1,126 @@
+{
+  "generated": "2026-06-12T15:10:37Z",
+  "sources": {
+    "v2": {
+      "url": "openapi-v2.v3.json",
+      "version": "2.0.0"
+    },
+    "v1": {
+      "url": "swagger.v3.json",
+      "version": "1.0.0"
+    }
+  },
+  "endpoints": {
+    "page_attachments": [
+      "_links",
+      "blogPostId",
+      "comment",
+      "createdAt",
+      "customContentId",
+      "downloadLink",
+      "fileId",
+      "fileSize",
+      "id",
+      "mediaType",
+      "mediaTypeDescription",
+      "pageId",
+      "status",
+      "title",
+      "version",
+      "webuiLink"
+    ],
+    "page_footer_comments": [
+      "_links",
+      "body",
+      "id",
+      "pageId",
+      "status",
+      "title",
+      "version"
+    ],
+    "page_inline_comments": [
+      "_links",
+      "body",
+      "id",
+      "pageId",
+      "properties",
+      "resolutionStatus",
+      "status",
+      "title",
+      "version"
+    ],
+    "space_blogposts": [
+      "_links",
+      "authorId",
+      "body",
+      "createdAt",
+      "id",
+      "spaceId",
+      "status",
+      "title",
+      "version"
+    ],
+    "space_pages": [
+      "_links",
+      "authorId",
+      "body",
+      "createdAt",
+      "id",
+      "lastOwnerId",
+      "ownerId",
+      "parentId",
+      "parentType",
+      "position",
+      "spaceId",
+      "status",
+      "subtype",
+      "title",
+      "version"
+    ],
+    "space_permissions": [
+      "id",
+      "operation",
+      "principal"
+    ],
+    "space_property_v1": [
+      "__ENDPOINT_MISSING__"
+    ],
+    "spaces": [
+      "_links",
+      "authorId",
+      "createdAt",
+      "currentActiveAlias",
+      "description",
+      "homepageId",
+      "icon",
+      "id",
+      "key",
+      "name",
+      "status",
+      "type"
+    ],
+    "templates_v1": [
+      "__ENDPOINT_MISSING__"
+    ],
+    "user_v1": [
+      "_expandable",
+      "_links",
+      "accountId",
+      "accountType",
+      "details",
+      "displayName",
+      "email",
+      "externalCollaborator",
+      "isExternalCollaborator",
+      "isGuest",
+      "operations",
+      "personalSpace",
+      "profilePicture",
+      "publicName",
+      "timeZone",
+      "type",
+      "userKey",
+      "username"
+    ]
+  }
+}
