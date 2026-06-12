@@ -6,7 +6,7 @@ in eine hierarchische Verzeichnisstruktur mit HMAC-SHA-256-signiertem Manifest.
 
 ## Features
 
-- Sichert 8 Confluence-Datentypen (GET-only, kein Schreibzugriff)
+- Sichert 12 Confluence-Datentypen inkl. Labels, Tasks, Custom Content und Smart-Content-Metadaten — Whiteboards, Databases, Folders, Embeds (GET-only, kein Schreibzugriff)
 - SHA256-Hashes pro Datei + HMAC-SHA-256-Manifest-Signatur
 - Zweistufiger Worker Pool (3 Spaces × 20 Pages global), Rate-Limiter (10 req/s)
 - Hierarchische Ausgabe: `spaces/KEY/pages/Titel/Untertitel/index.html`

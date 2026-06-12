@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -191,5 +192,117 @@ func TestValidateDomain(t *testing.T) {
 	}
 	if err := api.ValidateDomain("bad domain!"); err == nil {
 		t.Error("invalid domain accepted")
+	}
+}
+
+func TestFetchSpaceLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var results []map[string]any
+		switch r.URL.Path {
+		case "/wiki/api/v2/spaces/42/labels":
+			results = []map[string]any{{"id": "l1", "name": "team", "prefix": "global"}}
+		case "/wiki/api/v2/spaces/42/content/labels":
+			results = []map[string]any{{"id": "l2", "name": "howto", "prefix": "global"}}
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": results, "_links": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	labels, err := api.FetchSpaceLabels(context.Background(), c, "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels.Space) != 1 || labels.Space[0].Name != "team" {
+		t.Errorf("unexpected space labels: %+v", labels.Space)
+	}
+	if len(labels.Content) != 1 || labels.Content[0].Name != "howto" {
+		t.Errorf("unexpected content labels: %+v", labels.Content)
+	}
+}
+
+func TestFetchTasks_FiltersBySpace(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{"id": "7", "status": "incomplete", "pageId": "p1",
+					"body": map[string]any{"storage": map[string]any{"value": "<p>Do it</p>"}}},
+			},
+			"_links": map[string]any{},
+		})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	tasks, err := api.FetchTasks(context.Background(), c, "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotQuery, "space-id=42") {
+		t.Errorf("expected space-id filter in query, got: %s", gotQuery)
+	}
+	if len(tasks) != 1 || tasks[0].Status != "incomplete" || tasks[0].Body.Storage.Value != "<p>Do it</p>" {
+		t.Errorf("unexpected tasks: %+v", tasks)
+	}
+}
+
+func TestFetchContentIDsByType_UsesCQLSearch(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/wiki/rest/api/search") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		gotQuery, _ = url.QueryUnescape(r.URL.RawQuery)
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{"content": map[string]any{"id": "wb1", "type": "whiteboard", "title": "Brainstorm"}},
+			},
+			"size": 1,
+		})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	refs, err := api.FetchContentIDsByType(context.Background(), c, "KB", "whiteboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotQuery, `space = "KB" and type = whiteboard`) {
+		t.Errorf("unexpected CQL query: %s", gotQuery)
+	}
+	if len(refs) != 1 || refs[0].ID != "wb1" || refs[0].Title != "Brainstorm" {
+		t.Errorf("unexpected refs: %+v", refs)
+	}
+}
+
+func TestFetchContentIDsByType_RejectsUnknownType(t *testing.T) {
+	c := api.NewClient("https://example.invalid", "u@example.com", "tok")
+	if _, err := api.FetchContentIDsByType(context.Background(), c, "KB", "page"); err == nil {
+		t.Error("expected error for unsupported content type")
+	}
+}
+
+func TestFetchContentItem_UsesV2Endpoint(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]any{"id": "db9", "title": "Inventory"})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	item, err := api.FetchContentItem(context.Background(), c, "database", "db9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/wiki/api/v2/databases/db9" {
+		t.Errorf("expected /wiki/api/v2/databases/db9, got: %s", gotPath)
+	}
+	if !strings.Contains(string(item), "Inventory") {
+		t.Errorf("unexpected item payload: %s", item)
 	}
 }

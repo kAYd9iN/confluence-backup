@@ -1,8 +1,9 @@
 # confluence-backup — v0.3.0 (2026-03-09)
 
 Backup tool for Confluence Cloud. Backs up spaces, pages (HTML storage format), blog posts,
-comments, attachments, templates, users, and space permissions into a
-hierarchical directory structure with HMAC-SHA-256 signed manifest.
+comments, attachments, templates, users, space permissions, labels, inline tasks,
+custom content, and smart content metadata (whiteboards, databases, folders, embeds)
+into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
 
 ## Commands
 
@@ -48,6 +49,11 @@ hierarchical directory structure with HMAC-SHA-256 signed manifest.
 - **Hierarchical output**: `spaces/KEY/pages/Title/SubTitle/index.html`
 - **Backup dir timestamp**: local timezone (not UTC)
 - **Attachments**: metadata always; files only with --attachments flag
+- **Smart content** (whiteboards, databases, folders, embeds): no v2 list
+  endpoints — discovered per space via v1 CQL search, fetched by ID;
+  **metadata only** (canvas/database contents are not exportable via API)
+- **Labels/tasks/custom content**: per space as labels.json, tasks.json,
+  custom-content.json (only written when non-empty)
 - **HMAC key**: domain-separated (confluence-backup-manifest\x00)
 - **vendor/**: checked in for supply-chain safety
 

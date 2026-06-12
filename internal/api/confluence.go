@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 )
 
@@ -138,6 +139,40 @@ type User struct {
 	DisplayName string `json:"displayName"`
 	Email       string `json:"email"`
 	AccountType string `json:"accountType"`
+}
+
+// SpaceLabels groups space-level labels and labels used on content in the space.
+type SpaceLabels struct {
+	Space   []Label `json:"space"`
+	Content []Label `json:"content"`
+}
+
+// Task is an inline task (action item) from pages or blog posts.
+type Task struct {
+	ID          string `json:"id"`
+	LocalID     string `json:"localId,omitempty"`
+	SpaceID     string `json:"spaceId,omitempty"`
+	PageID      string `json:"pageId,omitempty"`
+	BlogPostID  string `json:"blogPostId,omitempty"`
+	Status      string `json:"status"`
+	CreatedBy   string `json:"createdBy,omitempty"`
+	AssignedTo  string `json:"assignedTo,omitempty"`
+	CompletedBy string `json:"completedBy,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+	DueAt       string `json:"dueAt,omitempty"`
+	CompletedAt string `json:"completedAt,omitempty"`
+	Body        struct {
+		Storage struct {
+			Value string `json:"value"`
+		} `json:"storage"`
+	} `json:"body"`
+}
+
+// ContentRef identifies a content item found via CQL search.
+type ContentRef struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Title string `json:"title"`
 }
 
 // --- Fetch functions ---
@@ -298,6 +333,134 @@ func FetchTemplates(ctx context.Context, client *Client, spaceKey string) ([]Tem
 		all = append(all, resp.Results...)
 	}
 	return all, nil
+}
+
+// FetchSpaceLabels returns space-level labels and content labels for a space.
+func FetchSpaceLabels(ctx context.Context, client *Client, spaceID string) (SpaceLabels, error) {
+	var sl SpaceLabels
+
+	spaceItems, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/labels?limit=250", spaceID))
+	if err != nil {
+		return sl, fmt.Errorf("fetch space labels for space %s: %w", spaceID, err)
+	}
+	for _, raw := range spaceItems {
+		var l Label
+		if json.Unmarshal(raw, &l) == nil {
+			sl.Space = append(sl.Space, l)
+		}
+	}
+
+	contentItems, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/content/labels?limit=250", spaceID))
+	if err != nil {
+		return sl, fmt.Errorf("fetch content labels for space %s: %w", spaceID, err)
+	}
+	for _, raw := range contentItems {
+		var l Label
+		if json.Unmarshal(raw, &l) == nil {
+			sl.Content = append(sl.Content, l)
+		}
+	}
+
+	return sl, nil
+}
+
+// FetchTasks returns all inline tasks in a space.
+func FetchTasks(ctx context.Context, client *Client, spaceID string) ([]Task, error) {
+	items, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/tasks?space-id=%s&body-format=storage&limit=250", spaceID))
+	if err != nil {
+		return nil, fmt.Errorf("fetch tasks for space %s: %w", spaceID, err)
+	}
+	tasks := make([]Task, 0, len(items))
+	for _, raw := range items {
+		var t Task
+		if err := json.Unmarshal(raw, &t); err == nil {
+			tasks = append(tasks, t)
+		}
+	}
+	return tasks, nil
+}
+
+// FetchCustomContent returns custom content (app-defined types) in a space.
+// The payload shape is app-specific, so items are kept as raw JSON.
+func FetchCustomContent(ctx context.Context, client *Client, spaceID string) ([]json.RawMessage, error) {
+	items, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/custom-content?limit=250", spaceID))
+	if err != nil {
+		return nil, fmt.Errorf("fetch custom content for space %s: %w", spaceID, err)
+	}
+	return items, nil
+}
+
+// smartContentTypes are v2 content types without list endpoints — they are
+// discovered per space via CQL search, then fetched individually by ID.
+// Maps CQL type name → v2 URL path segment.
+var smartContentTypes = map[string]string{
+	"whiteboard": "whiteboards",
+	"database":   "databases",
+	"folder":     "folders",
+	"embed":      "embeds",
+}
+
+// SmartContentTypes returns the discoverable content types in stable order.
+func SmartContentTypes() []string {
+	return []string{"whiteboard", "database", "folder", "embed"}
+}
+
+// searchMaxPages bounds v1 search pagination (250 items/page → 10k items).
+const searchMaxPages = 40
+
+// FetchContentIDsByType discovers content of a given type (whiteboard,
+// database, folder, embed) in a space via the v1 CQL search API, which is
+// the documented way to enumerate these types — v2 has no list endpoints.
+func FetchContentIDsByType(ctx context.Context, client *Client, spaceKey, contentType string) ([]ContentRef, error) {
+	if _, ok := smartContentTypes[contentType]; !ok {
+		return nil, fmt.Errorf("unsupported content type %q", contentType)
+	}
+	var refs []ContentRef
+	cql := url.QueryEscape(fmt.Sprintf("space = %q and type = %s", spaceKey, contentType))
+	for page := 0; page < searchMaxPages; page++ {
+		body, err := client.Get(ctx, fmt.Sprintf(
+			"/wiki/rest/api/search?cql=%s&limit=250&start=%d", cql, page*250))
+		if err != nil {
+			return refs, fmt.Errorf("search %s in space %s: %w", contentType, spaceKey, err)
+		}
+		var resp struct {
+			Results []struct {
+				Content ContentRef `json:"content"`
+			} `json:"results"`
+			Size int `json:"size"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return refs, fmt.Errorf("parse search results for %s in space %s: %w", contentType, spaceKey, err)
+		}
+		for _, r := range resp.Results {
+			if r.Content.ID != "" {
+				refs = append(refs, r.Content)
+			}
+		}
+		if len(resp.Results) < 250 {
+			break
+		}
+	}
+	return refs, nil
+}
+
+// FetchContentItem fetches a single whiteboard, database, folder, or embed
+// by ID. The v2 API exposes metadata only for these types (no exportable
+// body), so the full payload is kept as raw JSON.
+func FetchContentItem(ctx context.Context, client *Client, contentType, id string) (json.RawMessage, error) {
+	segment, ok := smartContentTypes[contentType]
+	if !ok {
+		return nil, fmt.Errorf("unsupported content type %q", contentType)
+	}
+	body, err := client.Get(ctx, fmt.Sprintf("/wiki/api/v2/%s/%s", segment, url.PathEscape(id)))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s %s: %w", contentType, id, err)
+	}
+	return json.RawMessage(body), nil
 }
 
 // FetchUserProfile fetches a single user profile by account ID (v1 API).
