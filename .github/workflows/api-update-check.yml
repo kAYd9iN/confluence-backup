@@ -13,9 +13,6 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Gate only on the variable — secrets cannot be accessed in job-level if conditions.
-    # If CONFLUENCE_DOMAIN is set but CI_CONFLUENCE_TOKEN is missing, the step fails visibly.
-    if: ${{ vars.CONFLUENCE_DOMAIN != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -27,14 +24,31 @@ jobs:
           persist-credentials: true
           token: ${{ secrets.REPO_PAT || github.token }}
 
+      # Domain and token are secrets (repo is public — secrets are masked in
+      # logs, variables are not). Secrets cannot be read in job-level `if`
+      # conditions, so gate via this preflight step instead.
+      - name: Preflight — check configuration
+        id: preflight
+        env:
+          CONFLUENCE_DOMAIN: ${{ secrets.CONFLUENCE_DOMAIN }}
+          CI_CONFLUENCE_TOKEN: ${{ secrets.CI_CONFLUENCE_TOKEN }}
+        run: |
+          if [ -z "$CONFLUENCE_DOMAIN" ] || [ -z "$CI_CONFLUENCE_TOKEN" ]; then
+            echo "::notice::Secrets CONFLUENCE_DOMAIN and/or CI_CONFLUENCE_TOKEN not configured — skipping API check."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check API schema
         id: check
+        if: steps.preflight.outputs.configured == 'true'
         env:
           # CI_CONFLUENCE_TOKEN should be a read-only token scoped to the minimum
           # required API endpoints — distinct from the full-backup CONFLUENCE_TOKEN.
           CONFLUENCE_TOKEN: ${{ secrets.CI_CONFLUENCE_TOKEN }}
-          CONFLUENCE_EMAIL: ${{ vars.CI_CONFLUENCE_EMAIL }}
-          CONFLUENCE_DOMAIN: ${{ vars.CONFLUENCE_DOMAIN }}
+          CONFLUENCE_EMAIL: ${{ secrets.CI_CONFLUENCE_EMAIL }}
+          CONFLUENCE_DOMAIN: ${{ secrets.CONFLUENCE_DOMAIN }}
         run: |
           set +e
           bash scripts/check-api-schema.sh
@@ -53,12 +67,13 @@ jobs:
             echo "snapshot_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Detect Anthropic API key
+      - name: Detect Claude credentials
         id: anthropic
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -n "$ANTHROPIC_API_KEY" ]; then
+          if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -78,7 +93,10 @@ jobs:
         if: steps.check.outputs.exit_code == '1' && steps.anthropic.outputs.present == 'true'
         uses: anthropics/claude-code-action@0f97b95b6536c26e5f6bd90faec370d41695beca  # v1
         with:
+          # Either secret works: ANTHROPIC_API_KEY (Console/pay-per-token) or
+          # CLAUDE_CODE_OAUTH_TOKEN (Pro/Max subscription via `claude setup-token`).
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             The daily Confluence API schema check detected drift. The diff between
             the stored baseline and the live API is in `drift.diff` (already in the

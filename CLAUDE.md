@@ -79,19 +79,23 @@ api-update-check (daily 06:00 UTC)
 ```
 
 - Baseline: `docs/api-snapshot.json` — committed via PR on first successful run
-- Script supports Basic Auth (set `CI_CONFLUENCE_EMAIL` var for ATATT tokens) or Bearer (ATSTT)
+- Script supports Basic Auth (set `CI_CONFLUENCE_EMAIL` secret for ATATT tokens) or Bearer (ATSTT)
+- Domain/token/email are **secrets**, not variables — repo is public, secrets are masked in logs
+- If neither CONFLUENCE_DOMAIN nor CI_CONFLUENCE_TOKEN secret is set, the job skips gracefully
 - Exit 2 (all endpoints unreachable) fails the job instead of writing an empty baseline
 
 ## Pending Manual Steps
 
-- Set SCORECARD_TOKEN secret (PAT with repo + read:org)
+- Set SCORECARD_TOKEN secret (optional — only improves Branch-Protection check)
 - Set COMMIT_SIGNING_PUBLIC_KEY secret (GPG key)
+- Set CONFLUENCE_DOMAIN secret (e.g. myorg.atlassian.net — for the daily API drift check)
 - Set CI_CONFLUENCE_TOKEN secret (read-only token for the daily API drift check)
-- Set CI_CONFLUENCE_EMAIL variable (only for ATATT personal tokens — Basic Auth)
-- Set ANTHROPIC_API_KEY secret (enables automatic code adaptation on API drift)
-- Set REPO_PAT secret (PAT with repo scope — lets drift PRs trigger CI and
-  auto-release tags trigger the release workflow)
-- Enable "Allow auto-merge" in repo settings (drift PRs merge once CI is green)
+- Set CI_CONFLUENCE_EMAIL secret (only for ATATT personal tokens — Basic Auth)
+- Set ANTHROPIC_API_KEY secret **or** CLAUDE_CODE_OAUTH_TOKEN secret (Pro/Max
+  subscription via `claude setup-token`) — enables automatic code adaptation on drift
+- Set REPO_PAT secret (PAT with repo + workflow scope — lets drift PRs trigger CI
+  and auto-release tags trigger the release workflow)
+- Enable "Allow auto-merge" in repo settings (snapshot-only drift PRs merge once CI is green)
 
 ## Extending: Adding a New Data Type
 
