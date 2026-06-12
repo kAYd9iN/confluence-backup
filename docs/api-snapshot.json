@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-12T15:31:52Z",
+  "generated": "2026-06-12T21:27:04Z",
   "sources": {
     "v2": {
       "url": "openapi-v2.v3.json",
@@ -11,6 +11,52 @@
     }
   },
   "endpoints": {
+    "database": [
+      "_links",
+      "authorId",
+      "createdAt",
+      "id",
+      "ownerId",
+      "parentId",
+      "parentType",
+      "position",
+      "spaceId",
+      "status",
+      "title",
+      "type",
+      "version"
+    ],
+    "embed": [
+      "_links",
+      "authorId",
+      "createdAt",
+      "embedUrl",
+      "id",
+      "ownerId",
+      "parentId",
+      "parentType",
+      "position",
+      "spaceId",
+      "status",
+      "title",
+      "type",
+      "version"
+    ],
+    "folder": [
+      "_links",
+      "authorId",
+      "createdAt",
+      "id",
+      "ownerId",
+      "parentId",
+      "parentType",
+      "position",
+      "spaceId",
+      "status",
+      "title",
+      "type",
+      "version"
+    ],
     "page_attachments": [
       "_links",
       "blogPostId",
@@ -49,6 +95,22 @@
       "title",
       "version"
     ],
+    "search_v1": [
+      "breadcrumbs",
+      "content",
+      "entityType",
+      "excerpt",
+      "friendlyLastModified",
+      "iconCssClass",
+      "lastModified",
+      "resultGlobalContainer",
+      "resultParentContainer",
+      "score",
+      "space",
+      "title",
+      "url",
+      "user"
+    ],
     "space_blogposts": [
       "_links",
       "authorId",
@@ -59,6 +121,31 @@
       "status",
       "title",
       "version"
+    ],
+    "space_content_labels": [
+      "id",
+      "name",
+      "prefix"
+    ],
+    "space_custom_content": [
+      "_links",
+      "authorId",
+      "blogPostId",
+      "body",
+      "createdAt",
+      "customContentId",
+      "id",
+      "pageId",
+      "spaceId",
+      "status",
+      "title",
+      "type",
+      "version"
+    ],
+    "space_labels": [
+      "id",
+      "name",
+      "prefix"
     ],
     "space_pages": [
       "_links",
@@ -103,6 +190,22 @@
       "name",
       "status",
       "type"
+    ],
+    "tasks": [
+      "assignedTo",
+      "blogPostId",
+      "body",
+      "completedAt",
+      "completedBy",
+      "createdAt",
+      "createdBy",
+      "dueAt",
+      "id",
+      "localId",
+      "pageId",
+      "spaceId",
+      "status",
+      "updatedAt"
     ],
     "templates_blueprint_v1": [
       "_expandable",
@@ -151,6 +254,21 @@
       "type",
       "userKey",
       "username"
+    ],
+    "whiteboard": [
+      "_links",
+      "authorId",
+      "createdAt",
+      "id",
+      "ownerId",
+      "parentId",
+      "parentType",
+      "position",
+      "spaceId",
+      "status",
+      "title",
+      "type",
+      "version"
     ]
   }
 }

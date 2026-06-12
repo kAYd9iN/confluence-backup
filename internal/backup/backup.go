@@ -237,10 +237,84 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 		}
 	}
 
+	// Labels, tasks, custom content, and smart content (whiteboards,
+	// databases, folders, embeds) — all non-critical: log and continue.
+	if !cfg.DryRun {
+		writeSpaceExtras(ctx, client, w, manifest, sp)
+	}
+
 	if len(pageErrs) > 0 {
 		return fmt.Errorf("%d page(s) failed", len(pageErrs))
 	}
 	return nil
+}
+
+// writeSpaceExtras backs up labels, inline tasks, custom content, and smart
+// content types (whiteboards, databases, folders, embeds) for one space.
+// All fetches are non-critical — failures are logged, the backup continues.
+func writeSpaceExtras(ctx context.Context, client *api.Client, w *storage.Writer,
+	manifest *Manifest, sp api.Space) {
+
+	writeJSON := func(relPath string, v any) {
+		data, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			slog.Warn("marshal failed", "path", relPath, "err", err)
+			return
+		}
+		if err := w.WriteFile(relPath, data); err != nil {
+			slog.Warn("write failed", "path", relPath, "err", err)
+			return
+		}
+		if err := manifest.AddFile(filepath.Join(w.Dir(), relPath)); err != nil {
+			slog.Warn("manifest update failed", "path", relPath, "err", err)
+		}
+	}
+
+	// Labels (space-level + content labels)
+	if labels, err := api.FetchSpaceLabels(ctx, client, sp.ID); err != nil {
+		slog.Warn("labels fetch failed", "space", sanitizeLog(sp.Key), "err", err)
+	} else if len(labels.Space) > 0 || len(labels.Content) > 0 {
+		writeJSON(filepath.Join("spaces", sp.Key, "labels.json"), labels)
+	}
+
+	// Inline tasks
+	if tasks, err := api.FetchTasks(ctx, client, sp.ID); err != nil {
+		slog.Warn("tasks fetch failed", "space", sanitizeLog(sp.Key), "err", err)
+	} else if len(tasks) > 0 {
+		writeJSON(filepath.Join("spaces", sp.Key, "tasks.json"), tasks)
+	}
+
+	// Custom content (app-defined types, raw JSON)
+	if custom, err := api.FetchCustomContent(ctx, client, sp.ID); err != nil {
+		slog.Warn("custom content fetch failed", "space", sanitizeLog(sp.Key), "err", err)
+	} else if len(custom) > 0 {
+		writeJSON(filepath.Join("spaces", sp.Key, "custom-content.json"), custom)
+	}
+
+	// Whiteboards, databases, folders, embeds — discovered via CQL search
+	// (v2 has no list endpoints for these), then fetched by ID. The v2 API
+	// exposes metadata only; whiteboard/database contents are not exportable.
+	for _, contentType := range api.SmartContentTypes() {
+		refs, err := api.FetchContentIDsByType(ctx, client, sp.Key, contentType)
+		if err != nil {
+			slog.Warn("content discovery failed",
+				"space", sanitizeLog(sp.Key), "type", contentType, "err", err)
+			continue
+		}
+		for _, ref := range refs {
+			item, err := api.FetchContentItem(ctx, client, contentType, ref.ID)
+			if err != nil {
+				slog.Warn("content fetch failed",
+					"space", sanitizeLog(sp.Key), "type", contentType, "id", ref.ID, "err", err)
+				continue
+			}
+			name := ref.ID
+			if ref.Title != "" {
+				name += "_" + storage.SanitizeName(ref.Title)
+			}
+			writeJSON(filepath.Join("spaces", sp.Key, contentType+"s", name+".json"), item)
+		}
+	}
 }
 
 func writePage(ctx context.Context, client *api.Client, w *storage.Writer,

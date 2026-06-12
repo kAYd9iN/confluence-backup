@@ -58,17 +58,26 @@ def deref(spec, obj, depth=0):
         depth += 1
     return obj
 
+def props_of(spec, schema, depth=0):
+    """Resolve a schema to its property map, merging allOf members."""
+    if depth > 10:
+        return {}
+    schema = deref(spec, schema)
+    props = dict(schema.get("properties", {}))
+    for member in schema.get("allOf", []):
+        props.update(props_of(spec, member, depth + 1))
+    return props
+
 def fields(spec, path):
     item = spec.get("paths", {}).get(path)
     if not item or "get" not in item:
         return ["__ENDPOINT_MISSING__"]
     try:
-        schema = deref(spec, item["get"]["responses"]["200"]["content"]["application/json"]["schema"])
-        props = schema.get("properties", {})
+        schema = item["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+        props = props_of(spec, schema)
         # List endpoints wrap items in {results: [...], _links: {...}}
         if "results" in props:
-            items = deref(spec, deref(spec, props["results"]).get("items", {}))
-            props = items.get("properties", {})
+            props = props_of(spec, deref(spec, props["results"]).get("items", {}))
         return sorted(props.keys()) or ["__SCHEMA_UNPARSEABLE__"]
     except (KeyError, TypeError):
         return ["__SCHEMA_UNPARSEABLE__"]
@@ -83,9 +92,18 @@ ENDPOINTS = {
     "page_footer_comments":  ("v2", "/pages/{id}/footer-comments"),
     "page_inline_comments":  ("v2", "/pages/{id}/inline-comments"),
     "space_properties":      ("v2", "/spaces/{space-id}/properties"),
+    "space_labels":          ("v2", "/spaces/{id}/labels"),
+    "space_content_labels":  ("v2", "/spaces/{id}/content/labels"),
+    "space_custom_content":  ("v2", "/spaces/{id}/custom-content"),
+    "tasks":                 ("v2", "/tasks"),
+    "whiteboard":            ("v2", "/whiteboards/{id}"),
+    "database":              ("v2", "/databases/{id}"),
+    "folder":                ("v2", "/folders/{id}"),
+    "embed":                 ("v2", "/embeds/{id}"),
     "templates_page_v1":     ("v1", "/wiki/rest/api/template/page"),
     "templates_blueprint_v1": ("v1", "/wiki/rest/api/template/blueprint"),
     "user_v1":               ("v1", "/wiki/rest/api/user"),
+    "search_v1":             ("v1", "/wiki/rest/api/search"),
 }
 
 specs = {"v2": v2, "v1": v1}
