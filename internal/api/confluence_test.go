@@ -115,6 +115,76 @@ func TestFetchPages_UsesStorageBodyFormat(t *testing.T) {
 	}
 }
 
+func TestFetchSpaceDetail_UsesV2PropertiesEndpoint(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/properties") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"key": "theme", "value": map[string]any{"color": "blue"}, "version": map[string]any{"number": 1}},
+				},
+				"_links": map[string]any{},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": []any{}, "_links": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	detail, err := api.FetchSpaceDetail(context.Background(), c,
+		api.Space{ID: "123", Key: "KB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, p := range paths {
+		if strings.Contains(p, "/wiki/rest/api/") {
+			t.Errorf("v1 endpoint must not be called, got: %s", p)
+		}
+		if p == "/wiki/api/v2/spaces/123/properties" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected v2 properties path /wiki/api/v2/spaces/123/properties, got: %v", paths)
+	}
+	if len(detail.Properties) != 1 || detail.Properties[0].Key != "theme" {
+		t.Errorf("unexpected properties: %+v", detail.Properties)
+	}
+}
+
+func TestFetchTemplates_UsesPageAndBlueprintEndpoints(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		var results []map[string]any
+		switch r.URL.Path {
+		case "/wiki/rest/api/template/page":
+			results = []map[string]any{{"templateId": "t1", "name": "Meeting Notes", "templateType": "page"}}
+		case "/wiki/rest/api/template/blueprint":
+			results = []map[string]any{{"templateId": "t2", "name": "Decision", "templateType": "blueprint"}}
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer srv.Close()
+
+	c := api.NewClient(srv.URL, "u@example.com", "tok")
+	templates, err := api.FetchTemplates(context.Background(), c, "KB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 requests (page + blueprint), got %d: %v", len(paths), paths)
+	}
+	if len(templates) != 2 || templates[0].TemplateID != "t1" || templates[1].TemplateID != "t2" {
+		t.Errorf("unexpected templates: %+v", templates)
+	}
+}
+
 func TestValidateDomain(t *testing.T) {
 	if err := api.ValidateDomain("myorg.atlassian.net"); err != nil {
 		t.Errorf("valid domain rejected: %v", err)
