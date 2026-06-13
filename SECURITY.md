@@ -81,3 +81,19 @@ No retention policy is enforced by the tool. Operators should:
 1. Define a retention period appropriate for their compliance requirements
 2. Securely delete backups beyond the retention period (`shred`, encrypted delete)
 3. Audit who has access to the backup storage location
+
+## Cryptography Bill of Materials (CBOM)
+
+The tool's cryptographic surface is enumerated in a CycloneDX 1.6 CBOM at
+[`docs/cbom.cdx.json`](docs/cbom.cdx.json): SHA-256 (hashing), HMAC-SHA-256
+(manifest signature), TLS ≥ 1.2 (transport), and ECDSA P-256 (cosign release
+signing). Automated scanners do not detect Go stdlib crypto, so the CBOM is
+hand-authored and kept honest by `scripts/check-cbom.sh`, which fails CI if a
+crypto import is not declared in it.
+
+The CBOM is checked against a **NIST SP 800-131A / FIPS-approved** policy
+([`policy/nist-crypto.rego`](policy/nist-crypto.rego), Open Policy Agent /
+conftest). A non-approved algorithm (e.g. MD5, SHA-1, RC4, or TLS < 1.2) fails
+the **release security gate** and blocks the release. Quantum-readiness is
+reported as a non-gating warning: ECDSA P-256 is NIST-approved but not
+quantum-safe, tracked for future post-quantum migration.

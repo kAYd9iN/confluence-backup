@@ -21,34 +21,52 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Generate SBoM
+      - name: Generate dependency SBoM
         run: |
+          # cdxgen --type go produces a dependency SBoM (modules, PURLs, hashes,
+          # licenses). It is NOT a CBOM: Go stdlib crypto is not a go.mod
+          # dependency, so it never appears here. The real Cryptography BoM is
+          # the hand-authored, policy-checked docs/cbom.cdx.json (below).
           npx --yes @cyclonedx/cdxgen@12.1.1 \
             --type go \
-            --output cbom.cdx.json \
+            --output sbom.cdx.json \
             .
 
-      - name: Optional sign SBoM
+      - name: Validate CBOM is consistent with the source
+        run: bash scripts/check-cbom.sh
+
+      - name: Check CBOM against NIST crypto policy (informational)
+        run: |
+          # Same policy the release gate enforces. Here it is informational so
+          # PRs surface crypto findings early; the hard gate lives in release.yml.
+          go run github.com/open-policy-agent/conftest@v0.68.2 \
+            test docs/cbom.cdx.json --policy policy
+
+      - name: Optional sign BoMs
         env:
           CBOM_SIGNING_KEY_PEM: ${{ secrets.CBOM_SIGNING_KEY_PEM }}
         run: |
           set -euo pipefail
           if [ -z "${CBOM_SIGNING_KEY_PEM:-}" ]; then
-            echo "No CBOM_SIGNING_KEY_PEM configured; unsigned SBoM artifact only."
+            echo "No CBOM_SIGNING_KEY_PEM configured; unsigned artifacts only."
             exit 0
           fi
           printf '%s\n' "${CBOM_SIGNING_KEY_PEM}" > /tmp/cbom-key.pem
-          if ! openssl dgst -sha256 -sign /tmp/cbom-key.pem -out cbom.cdx.json.sig cbom.cdx.json; then
-            echo "Signing failed. Continuing with unsigned artifact."
-            rm -f cbom.cdx.json.sig
-          fi
+          for f in sbom.cdx.json docs/cbom.cdx.json; do
+            if ! openssl dgst -sha256 -sign /tmp/cbom-key.pem -out "$f.sig" "$f"; then
+              echo "Signing $f failed. Continuing with unsigned artifact."
+              rm -f "$f.sig"
+            fi
+          done
           rm -f /tmp/cbom-key.pem
 
-      - name: Upload SBoM artifacts
+      - name: Upload SBoM + CBOM artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: cbom-cyclonedx
+          name: bom-cyclonedx
           path: |
-            cbom.cdx.json
-            cbom.cdx.json.sig
+            sbom.cdx.json
+            sbom.cdx.json.sig
+            docs/cbom.cdx.json
+            docs/cbom.cdx.json.sig
           retention-days: 365

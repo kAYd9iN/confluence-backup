@@ -1,0 +1,82 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "confluence-backup",
+      "bom-ref": "pkg:golang/github.com/kAYd9iN/confluence-backup"
+    },
+    "properties": [
+      {
+        "name": "cbom:source",
+        "value": "Hand-authored Cryptography Bill of Materials. The crypto surface of this tool is small and stable; automated scanners (cdxgen, cbomkit-theia) do not detect Go stdlib crypto, so this CBOM is maintained by hand and kept honest by scripts/check-cbom.sh, which fails CI if a crypto import in internal/ or cmd/ is not represented here."
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "name": "SHA-256",
+      "bom-ref": "crypto/sha-256",
+      "description": "File integrity hashing (manifest) and key derivation input. Go crypto/sha256.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": ["digest"],
+          "nistQuantumSecurityLevel": 2
+        },
+        "oid": "2.16.840.1.101.3.4.2.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "name": "HMAC-SHA-256",
+      "bom-ref": "crypto/hmac-sha-256",
+      "description": "Manifest signature (backup-manifest.sig). Go crypto/hmac over SHA-256.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "mac",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": ["tag", "verify"],
+          "nistQuantumSecurityLevel": 2
+        },
+        "oid": "1.2.840.113549.2.9"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "name": "TLS v1.2",
+      "bom-ref": "crypto/tls-1.2",
+      "description": "Minimum TLS version enforced on the API HTTP client transport (crypto/tls MinVersion VersionTLS12).",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "tls",
+          "version": "1.2"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "name": "ECDSA",
+      "bom-ref": "crypto/ecdsa-p256",
+      "description": "Release artifact signing via cosign / Sigstore keyless (ECDSA over NIST P-256). Used in CI release.yml, not in the tool binary at runtime.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "P-256",
+          "curve": "P-256",
+          "cryptoFunctions": ["sign", "verify"],
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "1.2.840.10045.4.3.2"
+      }
+    }
+  ]
+}

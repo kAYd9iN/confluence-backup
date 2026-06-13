@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,22 @@ import (
 
 	"golang.org/x/time/rate"
 )
+
+// newHTTPClient builds the shared HTTP client with an explicit TLS policy:
+// minimum TLS 1.2 and certificate verification that cannot be silently
+// disabled. Centralising this keeps both constructors honest and matches the
+// crypto asset declared in the CBOM (docs/cbom.cdx.json).
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: false,
+			},
+		},
+	}
+}
 
 // 10 requests/second, burst of 20 — conservative for Confluence Cloud.
 var rateLimit = rate.Every(100 * time.Millisecond)
@@ -51,7 +68,7 @@ func NewClient(domain, email, token string) *Client {
 		baseURL = "https://" + domain
 	}
 	return &Client{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: newHTTPClient(),
 		baseURL:    baseURL,
 		email:      email,
 		token:      token,
@@ -71,7 +88,7 @@ func NewClientBearer(baseURL, token string) *Client {
 		baseURL = "https://" + baseURL
 	}
 	return &Client{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: newHTTPClient(),
 		baseURL:    baseURL,
 		token:      token,
 		auth:       authBearer,
