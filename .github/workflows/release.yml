@@ -45,6 +45,17 @@ jobs:
       - name: Unit tests (race detector)
         run: go test -race -cover ./...
 
+      - name: CBOM is consistent with the source
+        run: bash scripts/check-cbom.sh
+
+      - name: Block release on non-NIST cryptography (CBOM policy)
+        run: |
+          # Hard gate: deny rules in policy/nist-crypto.rego fail the build if any
+          # cryptographic asset in docs/cbom.cdx.json is not NIST-approved (weak
+          # algorithm, or TLS < 1.2). Quantum-readiness findings are warn-only.
+          go run github.com/open-policy-agent/conftest@v0.68.2 \
+            test docs/cbom.cdx.json --policy policy
+
       - name: Block release on open security findings
         env:
           GH_TOKEN: ${{ github.token }}
