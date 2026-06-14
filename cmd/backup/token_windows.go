@@ -24,7 +24,7 @@ func getCredentials() (credentials, error) {
 		if err != nil {
 			return credentials{}, fmt.Errorf("CONFLUENCE_TOKEN not set and credential not found in Windows Credential Manager (target: confluence-backup): %w", err)
 		}
-		token = string(cred.CredentialBlob)
+		token = decodeCredentialBlob(cred.CredentialBlob)
 	}
 	email := os.Getenv("CONFLUENCE_EMAIL")
 	if email != "" {
