@@ -1,4 +1,4 @@
-# confluence-backup — v0.3.0 (2026-03-09)
+# confluence-backup — v0.5.0
 
 Backup tool for Confluence Cloud. Backs up spaces, pages (HTML storage format), blog posts,
 comments, attachments, templates, users, space permissions, labels, inline tasks,
@@ -33,6 +33,10 @@ into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
 | `internal/backup/manifest.go` | SHA256 per file + HMAC-SHA-256 .sig, sync.Mutex protected |
 | `internal/storage/writer.go` | Hierarchical writer, 0600 files, path-traversal + symlink protection |
 | `cmd/backup/main.go` | CLI entry point |
+| `scripts/check-api-schema.sh` | Credential-free API drift check vs published OpenAPI spec |
+| `scripts/check-cbom.sh` | Anti-staleness: every crypto import must be in the CBOM |
+| `docs/cbom.cdx.json` | CycloneDX 1.6 Cryptography BoM (hand-authored) |
+| `policy/nist-crypto.rego` | OPA/conftest NIST crypto policy (gates the release) |
 
 ## Architecture
 
@@ -55,6 +59,9 @@ into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
 - **Labels/tasks/custom content**: per space as labels.json, tasks.json,
   custom-content.json (only written when non-empty)
 - **HMAC key**: domain-separated (confluence-backup-manifest\x00)
+- **TLS**: explicit minimum TLS 1.2, `InsecureSkipVerify` hard-false (shared `newHTTPClient()`)
+- **CBOM**: real crypto surface in `docs/cbom.cdx.json`, checked against NIST
+  SP 800-131A via OPA/conftest; non-approved algorithm or TLS<1.2 gates the release
 - **vendor/**: checked in for supply-chain safety
 
 ## Credentials
@@ -82,8 +89,8 @@ api-update-check (daily 06:00 UTC — no credentials needed)
   → PR with label api-drift (auto-merge only if snapshot-only;
     Go code changes always require human review — prompt-injection guard)
   → merge → auto-release bumps 0ver minor + pushes tag
-  → release workflow: security-gate (govulncheck, gosec, race tests,
-    blocks while issues labeled `security` are open) → build → signed release
+  → release workflow: security-gate (govulncheck, gosec, race tests, CBOM NIST
+    policy, blocks while issues labeled `security` are open) → build → signed release
 ```
 
 - The check uses Atlassian's public spec (dac-static.atlassian.com) — the API
@@ -93,15 +100,20 @@ api-update-check (daily 06:00 UTC — no credentials needed)
   marks endpoints the tool calls that are no longer documented (currently: none)
 - Exit 2 (spec download failed) fails the job; no snapshot is written
 
-## Pending Manual Steps
+## Dependency Updates (Dependabot)
 
-- Set SCORECARD_TOKEN secret (optional — only improves Branch-Protection check)
-- Set COMMIT_SIGNING_PUBLIC_KEY secret (GPG key)
-- Set ANTHROPIC_API_KEY secret **or** CLAUDE_CODE_OAUTH_TOKEN secret (Pro/Max
-  subscription via `claude setup-token`) — enables automatic code adaptation on drift
-- Set REPO_PAT secret (PAT with repo + workflow scope — lets drift PRs trigger CI
-  and auto-release tags trigger the release workflow)
-- Enable "Allow auto-merge" in repo settings (snapshot-only drift PRs merge once CI is green)
+- `dependabot.yml`: daily, with a 7-day `cooldown` (supply-chain maturity window
+  — a release is only proposed a week after publication; security advisories bypass it)
+- `dependabot-auto-merge.yml`: auto-merges non-major bumps once required CI is green
+  (build + security-and-quality + dependency-review); major bumps stay open for review
+- Branch ruleset `main-protection` enforces PR + required checks before any merge
+
+## Configured (was "pending")
+
+- ✅ Repo variable SCORECARD_ENABLED=true; secrets CLAUDE_CODE_OAUTH_TOKEN + REPO_PAT set
+- ✅ "Allow auto-merge" enabled; `main-protection` ruleset active; Actions cannot approve PRs
+- Optional, still open: SCORECARD_TOKEN (improves Branch-Protection check only),
+  COMMIT_SIGNING_PUBLIC_KEY + COMMIT_SIGNING_ENABLED (to enforce signed commits)
 
 ## Extending: Adding a New Data Type
 

@@ -1,8 +1,10 @@
 # confluence-backup
 
 Automatisiertes Backup-Werkzeug für Confluence Cloud — sichert Spaces, Pages (HTML),
-Blog-Posts, Kommentare, Anhänge, Templates, Benutzerprofile und Space-Berechtigungen
-in eine hierarchische Verzeichnisstruktur mit HMAC-SHA-256-signiertem Manifest.
+Blog-Posts, Kommentare, Anhänge, Templates, Benutzerprofile, Space-Berechtigungen,
+Labels, Inline-Tasks, Custom Content und Smart-Content-Metadaten (Whiteboards,
+Databases, Folders, Embeds) in eine hierarchische Verzeichnisstruktur mit
+HMAC-SHA-256-signiertem Manifest.
 
 ## Features
 
@@ -83,7 +85,14 @@ backups/2026-03-08T12-00-00/
 ├── spaces/
 │   └── KB/
 │       ├── space.json           # Space-Metadaten + Berechtigungen
+│       ├── labels.json          # Space- + Content-Labels
+│       ├── tasks.json           # Inline-Tasks (Action Items)
+│       ├── custom-content.json  # App-definierte Custom-Content-Typen
 │       ├── templates/           # Space-Templates
+│       ├── whiteboards/         # Whiteboard-Metadaten (pro ID)
+│       ├── databases/           # Database-Metadaten (pro ID)
+│       ├── folders/             # Folder-Metadaten (pro ID)
+│       ├── embeds/              # Embed-Metadaten (pro ID)
 │       ├── pages/
 │       │   └── Getting_Started/
 │       │       ├── index.html   # Page-HTML
@@ -100,6 +109,11 @@ backups/2026-03-08T12-00-00/
 └── backup-manifest.sig          # HMAC-SHA-256-Signatur
 ```
 
+> Whiteboards, Databases, Folders und Embeds haben keine v2-Listen-Endpoints;
+> sie werden pro Space via CQL-Suche entdeckt und einzeln geladen. Die API
+> liefert für diese Typen nur **Metadaten** (Canvas-/Datenbankinhalte sind
+> nicht exportierbar). Dateien werden nur geschrieben, wenn Inhalt vorhanden ist.
+
 ## Security & Trust
 
 | Maßnahme | Details |
@@ -108,10 +122,23 @@ backups/2026-03-08T12-00-00/
 | cosign | Keyless-Signing aller Release-Binaries via Sigstore OIDC |
 | HMAC-SHA-256 | Manifest-Signatur jedes Backups (`backup-manifest.sig`) |
 | GET-only API | HTTP-Client exponiert nur `Get()` + `Download()` — kein Schreibzugriff |
+| TLS ≥ 1.2 | Explizit erzwungen, Zertifikatsprüfung nicht abschaltbar |
+| Release-Security-Gate | Release blockiert bei offenen `security`-Issues, fehlgeschlagenem govulncheck/gosec/Race-Test oder nicht-NIST-konformer Krypto |
+| CBOM + NIST-Policy | `docs/cbom.cdx.json` (CycloneDX 1.6) gegen NIST SP 800-131A via OPA/conftest geprüft |
 | SHA-gepinnte Actions | Alle CI-Actions auf Commit-SHA gepinnt |
 | govulncheck + gosec | SAST bei jedem Push |
 | OpenSSF Scorecard | Wöchentliches Security-Scoring |
+| Dependabot | 7-Tage-Cooldown + Auto-Merge reifer Minor/Patch-Bumps; Major manuell |
+| Branch-Protection | `main`-Ruleset: PR + Pflicht-Checks erzwungen, kein Force-Push |
 | vendor/ committed | Supply-Chain: alle Abhängigkeiten eingecheckt |
+
+## Self-Update-Schlaufe
+
+Ein täglicher Workflow (`api-update-check`) vergleicht Atlassians publizierte
+OpenAPI-Spec gegen die committete Baseline (`docs/api-snapshot.json`) — ohne
+Credentials. Bei Drift passt Claude den Code automatisch an und öffnet einen PR;
+nach dem Merge erzeugt `auto-release` einen versionierten, signierten Release
+(sofern das Security-Gate frei ist). Details: [CLAUDE.md](CLAUDE.md).
 
 ## Versioning
 
