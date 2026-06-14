@@ -31,6 +31,7 @@ type Summary struct {
 // All mutating methods are safe to call from concurrent goroutines.
 type Manifest struct {
 	mu          sync.Mutex  // protects Files during concurrent backup
+	Root        string      `json:"-"` // backup dir root; file names are stored relative to it
 	Timestamp   time.Time   `json:"timestamp"`
 	ToolVersion string      `json:"tool_version"`
 	Domain      string      `json:"domain"`
@@ -46,23 +47,47 @@ func NewManifest(domain, version string, ts time.Time) *Manifest {
 	}
 }
 
-// AddFile hashes the file at path and records it as a successful entry.
-// Safe to call concurrently from multiple goroutines.
-func (m *Manifest) AddFile(path string) error {
-	f, err := os.Open(path) // #nosec G304 -- path is always an internally constructed backup path
+// hashFile returns the lowercase hex SHA-256 of the file at path. The same
+// helper is used when building the manifest and when verifying it, so the two
+// can never compute the hash differently.
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path) // #nosec G304 -- internally constructed backup path / manifest-listed file
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		return "", err
 	}
 	defer f.Close()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// manifestName returns the name to record for a file: its path relative to the
+// backup root (forward-slashed for portability), so each entry maps to a unique
+// file and can be re-hashed during verify. Falls back to the base name when no
+// root is set (e.g. in tests).
+func (m *Manifest) manifestName(path string) string {
+	if m.Root != "" {
+		if rel, err := filepath.Rel(m.Root, path); err == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.Base(path)
+}
+
+// AddFile hashes the file at path and records it as a successful entry.
+// Safe to call concurrently from multiple goroutines.
+func (m *Manifest) AddFile(path string) error {
+	sum, err := hashFile(path)
+	if err != nil {
 		return fmt.Errorf("hash %s: %w", path, err)
 	}
 
 	entry := FileEntry{
-		Name:   filepath.Base(path),
-		SHA256: hex.EncodeToString(h.Sum(nil)),
+		Name:   m.manifestName(path),
+		SHA256: sum,
 		Status: "ok",
 	}
 	m.mu.Lock()
@@ -109,6 +134,10 @@ func (m *Manifest) Write(path, token string) error {
 	return os.WriteFile(sigPath, []byte(sig), 0600)
 }
 
+// VerifyManifest checks the HMAC-SHA-256 signature of the manifest AND re-hashes
+// every successfully-backed-up file against the signed SHA-256 in the manifest.
+// The signature proves the manifest (and its hashes) is authentic; the re-hash
+// proves the backup files still match it. A mismatch in either fails.
 func VerifyManifest(manifestPath, token string) error {
 	data, err := os.ReadFile(manifestPath) // #nosec G304 -- path comes from CLI flag
 	if err != nil {
@@ -119,10 +148,42 @@ func VerifyManifest(manifestPath, token string) error {
 	if err != nil {
 		return fmt.Errorf("read sig: %w", err)
 	}
-	expected := computeHMAC(data, token)
-	if !hmac.Equal([]byte(expected), sigBytes) {
+	expectedBytes, err := hex.DecodeString(computeHMAC(data, token))
+	if err != nil {
+		return fmt.Errorf("compute expected signature: %w", err)
+	}
+	storedBytes, err := hex.DecodeString(strings.TrimSpace(string(sigBytes)))
+	if err != nil {
+		return fmt.Errorf("malformed signature file (%s): not valid hex", sigPath)
+	}
+	if !hmac.Equal(expectedBytes, storedBytes) {
 		return fmt.Errorf("manifest signature mismatch — backup may have been tampered with")
 	}
+
+	// Manifest is authentic; now confirm the backup files still match it.
+	var parsed struct {
+		Files []FileEntry `json:"files"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return fmt.Errorf("parse manifest: %w", err)
+	}
+	dir := filepath.Dir(manifestPath)
+	checked := 0
+	for _, f := range parsed.Files {
+		if f.Status != "ok" {
+			continue
+		}
+		filePath := filepath.Join(dir, filepath.FromSlash(f.Name))
+		sum, err := hashFile(filePath)
+		if err != nil {
+			return fmt.Errorf("verify %s: %w", f.Name, err)
+		}
+		if !strings.EqualFold(sum, f.SHA256) {
+			return fmt.Errorf("file hash mismatch for %s — backup file was modified after signing", f.Name)
+		}
+		checked++
+	}
+	_ = checked
 	return nil
 }
 
