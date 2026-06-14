@@ -3,17 +3,23 @@ updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "06:00"
       timezone: Europe/Zurich
     open-pull-requests-limit: 5
+    # Supply-chain maturity window: adopt a release only after it has been
+    # public for a week, so a compromised or yanked version is likely caught
+    # before it is merged. Applies to version updates only — security
+    # advisories bypass the cooldown and are proposed immediately.
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "06:00"
       timezone: Europe/Zurich
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
