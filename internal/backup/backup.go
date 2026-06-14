@@ -56,6 +56,9 @@ func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 		return "", fmt.Errorf("create backup dir: %w", err)
 	}
 	manifest := NewManifest(cfg.Domain, cfg.ToolVersion, ts)
+	// Record file names relative to the backup root so each manifest entry maps
+	// to a unique file and can be re-hashed during verify.
+	manifest.Root = w.Dir()
 
 	// --- Fetch all spaces ---
 	spaces, err := api.FetchSpaces(ctx, client)
@@ -165,8 +168,16 @@ func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
 			slog.Warn("template marshal failed", "space", sp.Key, "name", tmpl.Name, "err", err)
 			continue
 		}
+		// Include the unique template ID in the filename: many templates share
+		// a display name (e.g. several "Default index page template" blueprints,
+		// plus page+blueprint variants), which would otherwise sanitise to the
+		// same path and silently overwrite each other.
+		tName := storage.SanitizeName(tmpl.Name)
+		if tName == "" {
+			tName = "template"
+		}
 		tPath := filepath.Join("spaces", sp.Key, "templates",
-			storage.SanitizeName(tmpl.Name)+".json")
+			tName+"_"+storage.SanitizeName(tmpl.TemplateID)+".json")
 		if !cfg.DryRun {
 			if err := w.WriteFile(tPath, tJSON); err != nil {
 				slog.Warn("template write failed", "space", sp.Key, "name", tmpl.Name, "err", err)
