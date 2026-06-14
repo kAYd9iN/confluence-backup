@@ -5,11 +5,11 @@ on:
     tags:
       - 'v*'
 
+# Least privilege (issue #25): the workflow grants nothing by default; each
+# job below declares only the permissions it needs. In particular the build
+# jobs do NOT get contents:write — only the release job does.
 permissions:
-  contents: write
-  actions: read
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   # Security gate: every release runs the full security check suite AND is
@@ -72,6 +72,11 @@ jobs:
   build:
     name: Build ${{ matrix.artifact }}
     needs: security-gate
+    # Build needs OIDC for provenance attestation — but NOT contents:write.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -121,6 +126,10 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    # Only this job writes to the repo (creates the Release); id-token for cosign.
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
