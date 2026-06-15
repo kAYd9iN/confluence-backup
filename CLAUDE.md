@@ -112,14 +112,29 @@ api-update-check (daily 06:00 UTC — no credentials needed)
   — a release is only proposed a week after publication; security advisories bypass it)
 - `dependabot-auto-merge.yml`: auto-merges non-major bumps once required CI is green
   (build + security-and-quality + dependency-review); major bumps stay open for review
-- Branch ruleset `main-protection` enforces PR + required checks before any merge
+- Branch ruleset `main-protection` enforces PR + required checks + **squash-only
+  merges** before any merge
+
+## Commit signing — not enforced (by design)
+
+Commit signing is intentionally NOT enforced at the branch level. GitHub's
+`required_signatures` rule rejects merging any PR that contains unsigned commits
+(it inspects the PR's commits, not just the squash result) — which would break
+the api-drift self-update loop (its `github-actions[bot]` commits are unsigned)
+and block any human PR with unsigned commits. Enforcing it would require every
+commit producer to sign: local commits (SSH/GPG signing) AND reworking the loop
+to create its commits via the GitHub API. The high-value signature — the release
+artifacts — is already provided by cosign + SLSA provenance, so commit signing
+would be defense-in-depth only. The old `commit-signature.yml` workflow was
+removed: its strict mode was incompatible with bot commits and its warn-only mode
+verified nothing.
 
 ## Configured (was "pending")
 
 - ✅ Repo variable SCORECARD_ENABLED=true; secrets CLAUDE_CODE_OAUTH_TOKEN + REPO_PAT set
-- ✅ "Allow auto-merge" enabled; `main-protection` ruleset active; Actions cannot approve PRs
-- Optional, still open: SCORECARD_TOKEN (improves Branch-Protection check only),
-  COMMIT_SIGNING_PUBLIC_KEY + COMMIT_SIGNING_ENABLED (to enforce signed commits)
+- ✅ "Allow auto-merge" enabled; `main-protection` ruleset active (PR + checks +
+  squash-only); Actions cannot approve PRs
+- Optional, still open: SCORECARD_TOKEN (improves Branch-Protection check only)
 
 ## Extending: Adding a New Data Type
 
