@@ -97,3 +97,22 @@ conftest). A non-approved algorithm (e.g. MD5, SHA-1, RC4, or TLS < 1.2) fails
 the **release security gate** and blocks the release. Quantum-readiness is
 reported as a non-gating warning: ECDSA P-256 is NIST-approved but not
 quantum-safe, tracked for future post-quantum migration.
+
+## Accepted OpenSSF Scorecard findings
+
+CodeQL reports no code issues. The remaining OpenSSF Scorecard alerts are
+posture warnings, handled as follows:
+
+- **Token-Permissions** — fixed: every workflow declares `contents: read` at the
+  top level and grants write scopes only on the jobs that need them.
+- **Vulnerabilities** — dependency CVEs are kept current by Dependabot; reachable
+  issues are gated by `govulncheck` in the release security gate.
+- **Branch-Protection / Code-Review** (`required_approving_review_count: 0`) —
+  **accepted by design.** The api-drift self-update loop auto-merges snapshot-only
+  PRs once required status checks pass; requiring human approvers would break it.
+  Code changes (Go/scripts) still require human review (the loop only auto-merges
+  snapshot-only PRs), and the `main` ruleset still enforces PR + required checks +
+  no force-push.
+- **Fuzzing** — not yet integrated; on the roadmap (parsers handle untrusted API
+  responses, so fuzzing is a planned hardening step).
+- **CII Best Practices badge** — optional, not pursued.
