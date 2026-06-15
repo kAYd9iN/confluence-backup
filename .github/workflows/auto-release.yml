@@ -8,9 +8,10 @@ on:
   pull_request:
     types: [closed]
 
+# Least privilege: read-only at the workflow level; the tag job gets the write
+# scopes it needs (push tag, open fallback issue).
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 jobs:
   tag:
@@ -18,6 +19,9 @@ jobs:
     if: >-
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'api-drift')
+    permissions:
+      contents: write
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
