@@ -183,3 +183,12 @@ GOTOOLCHAIN=go1.25.8 go test -race -cover ./...
 go build -mod=vendor -ldflags="-X main.version=dev" -o confluence-backup ./cmd/backup/
 go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 ```
+
+## Lizenz
+
+Lizenziert unter der **GNU General Public License v3.0** — siehe [LICENSE](LICENSE).
+
+Freie Software: nutzen, studieren, anpassen und weitergeben ist erlaubt (auch
+kommerziell). Copyleft: jede Weitergabe oder modifizierte Version muss ebenfalls
+unter der GPL-3.0 frei bleiben — es kann keine geschlossene, proprietäre Version
+daraus gemacht werden.
