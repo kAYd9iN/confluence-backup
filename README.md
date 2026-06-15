@@ -40,20 +40,52 @@ cosign verify-blob \
 
 ## Konfiguration
 
-**API-Token setzen:**
+Der Token wird aus `CONFLUENCE_TOKEN` (Umgebungsvariable) oder dem Windows
+Credential Manager (Ziel `confluence-backup`) gelesen:
 
 ```bash
 # Linux/macOS
-export CONFLUENCE_TOKEN=<Atlassian PAT>
+export CONFLUENCE_TOKEN=<Atlassian Token>
 
-# Windows (Credential Manager)
-cmdkey /generic:confluence-backup /user:api /pass:<Atlassian PAT>
+# Windows (Credential Manager) — Token wird als UTF-16 gespeichert und korrekt dekodiert
+cmdkey /generic:confluence-backup /user:api /pass:<Atlassian Token>
 ```
+
+### Authentifizierung: zwei Modi
+
+| Modus | Wann | Setup |
+|-------|------|-------|
+| **Basic Auth** (persönlicher Account) | `CONFLUENCE_EMAIL` gesetzt | Personal API Token (`ATATT…`) von [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) + `CONFLUENCE_EMAIL=<deine-atlassian-email>`. Erbt die Leserechte des Accounts — keine Scope-Konfiguration nötig. |
+| **Bearer Auth** (Service-Account) | keine `CONFLUENCE_EMAIL` | Service-Account-Token (`ATSTT…`) über das API-Gateway. `CONFLUENCE_CLOUD_ID` setzen (umgeht die `read:me`-Auto-Discovery; Cloud-ID via `https://<domain>/_edge/tenant_info`). |
+
+**Service-Account-Token — benötigte Scopes:** Der Token muss mit diesen
+granularen Confluence-Read-Scopes erstellt werden, sonst antwortet die API mit
+`401 "scope does not match"`:
+
+```
+read:space:confluence            read:attachment:confluence
+read:page:confluence             read:comment:confluence
+read:blogpost:confluence         read:task:confluence
+read:space.permission:confluence read:whiteboard:confluence
+read:space.property:confluence   read:database:confluence
+read:label:confluence            read:folder:confluence
+read:custom-content:confluence   read:embed:confluence
+read:template:confluence         read:user:confluence
+search:confluence
+```
+
+> Der Service-Account braucht zusätzlich **Leserechte auf die zu sichernden
+> Spaces** (Space Settings → Permissions). Fehlen einzelne Scopes, werden die
+> betroffenen Datentypen übersprungen (per-Endpoint non-fatal), der Rest läuft.
 
 **Backup ausführen:**
 
 ```bash
-confluence-backup --domain myorg.atlassian.net --output ./backups
+# Basic Auth (persönlicher Account)
+CONFLUENCE_EMAIL=me@example.com confluence-backup --domain myorg.atlassian.net --output ./backups
+
+# Bearer Auth (Service-Account)
+CONFLUENCE_CLOUD_ID=<uuid> confluence-backup --domain myorg.atlassian.net --output ./backups
 ```
 
 **Integrität prüfen:**

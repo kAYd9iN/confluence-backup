@@ -45,6 +45,12 @@ into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
   - `CONFLUENCE_EMAIL` set → Basic Auth (`ATATT` token) against `https://{domain}/wiki/...`
   - No email → Bearer Auth (`ATSTT` service account token) via API Gateway:
     `https://api.atlassian.com/ex/confluence/{cloudID}/wiki/...`
+  - Service-account tokens need granular Confluence read scopes
+    (read:space/page/blogpost/space.permission/space.property/label/
+    custom-content/template/attachment/comment/task/whiteboard/database/
+    folder/embed/user:confluence + search:confluence) or the API returns
+    `401 "scope does not match"` — full list in README → Konfiguration
+  - Windows credential blob is UTF-16LE (cmdkey) — decoded in `cmd/backup/credblob.go`
 - **Cloud ID**: set `CONFLUENCE_CLOUD_ID` to skip auto-discovery (recommended; auto-discovery requires `read:me` scope)
 - **Space-scoped endpoints**: `/wiki/api/v2/spaces/{id}/pages` — avoids API Gateway filter bug
 - **Body format**: `storage` (Confluence native XML) — `view` not supported by API Gateway
