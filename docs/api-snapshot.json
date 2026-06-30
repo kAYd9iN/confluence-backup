@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-12T21:27:04Z",
+  "generated": "2026-06-30T20:09:05Z",
   "sources": {
     "v2": {
       "url": "openapi-v2.v3.json",
@@ -188,6 +188,7 @@
       "id",
       "key",
       "name",
+      "spaceOwnerId",
       "status",
       "type"
     ],
