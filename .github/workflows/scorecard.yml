@@ -37,7 +37,7 @@ jobs:
           repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
 
       - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@d1ba80a13dd99fba24a470575428917156a28b43  # v3 (2026-03-06)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3  # v3 (2026-03-06)
         with:
           sarif_file: scorecard-results.sarif
           category: scorecard
