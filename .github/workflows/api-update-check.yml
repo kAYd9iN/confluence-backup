@@ -75,7 +75,7 @@ jobs:
       # the verification step below runs the full test suite.
       - name: Adapt tool to API changes (Claude)
         if: steps.check.outputs.exit_code == '1' && steps.anthropic.outputs.present == 'true'
-        uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341  # v1
+        uses: anthropics/claude-code-action@c038e4dcdedfbbca18dfb17df35a17e40ded4ddc  # v1
         with:
           # Either secret works: ANTHROPIC_API_KEY (Console/pay-per-token) or
           # CLAUDE_CODE_OAUTH_TOKEN (Pro/Max subscription via `claude setup-token`).
