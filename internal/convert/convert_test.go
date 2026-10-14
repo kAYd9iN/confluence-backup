@@ -32,6 +32,9 @@ func (fakeResolver) Attachment(space, page, file string) (string, bool) {
 	}
 	return "", false
 }
+func (r fakeResolver) Image(space, page, file string) (string, bool) {
+	return r.Attachment(space, page, file)
+}
 func (fakeResolver) User(id string) string {
 	if id == "u1" {
 		return "Anna Muster"

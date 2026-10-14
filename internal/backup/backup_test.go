@@ -3,6 +3,8 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"sync"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"github.com/kAYd9iN/confluence-backup/internal/api"
 	"github.com/kAYd9iN/confluence-backup/internal/export"
 	"github.com/kAYd9iN/confluence-backup/internal/model"
+	"github.com/kAYd9iN/confluence-backup/internal/xwiki"
 )
 
 // fakeConfluence serves a small space with everything the backup must keep:
@@ -113,7 +116,17 @@ const homeBody = `<p>home</p>` +
 	`<ac:image ac:alt="Bild"><ri:attachment ri:filename="Bild.png"/></ac:image>` +
 	`<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Hinweis</p></ac:rich-text-body></ac:structured-macro>` +
 	`<ac:structured-macro ac:name="children"/>` +
-	`<p><ac:link><ri:page ri:content-title="Gelöscht"/></ac:link></p>`
+	`<p><ac:link><ri:page ri:content-title="Gelöscht"/></ac:link></p>` +
+	`<p><ac:link><ri:attachment ri:filename="Bild.png"/><ac:plain-text-link-body><![CDATA[Bild herunterladen]]></ac:plain-text-link-body></ac:link></p>` +
+	`<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">go</ac:parameter>` +
+	`<ac:plain-text-body><![CDATA[if a < b && c > d { return }]]></ac:plain-text-body></ac:structured-macro>` +
+	`<table><tbody><tr><th>Spalte</th><th>Wert</th></tr><tr><td>Ä Ö Ü</td><td>100&nbsp;%</td></tr></tbody></table>` +
+	`<ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">Mehr</ac:parameter>` +
+	`<ac:rich-text-body><p>Aufgeklappt</p></ac:rich-text-body></ac:structured-macro>` +
+	`<ac:task-list><ac:task><ac:task-id>1</ac:task-id><ac:task-status>complete</ac:task-status>` +
+	`<ac:task-body>Erledigt</ac:task-body></ac:task></ac:task-list>` +
+	`<p><ac:structured-macro ac:name="status"><ac:parameter ac:name="title">FERTIG</ac:parameter>` +
+	`<ac:parameter ac:name="colour">Green</ac:parameter></ac:structured-macro></p>`
 
 func runBackup(t *testing.T, srv *httptest.Server) (string, error) {
 	t.Helper()
@@ -299,5 +312,226 @@ func TestPipeline_BackupThenExport(t *testing.T) {
 	rep := readFile(t, site, "export-report.txt")
 	if !strings.Contains(rep, "Gelöscht") || !strings.Contains(rep, "children") {
 		t.Errorf("report lacks unresolved link or placeholder:\n%s", rep)
+	}
+}
+
+// fakeXWiki records the REST writes of an import and answers GETs for pages
+// it has received (for the post-import verification).
+type fakeXWiki struct {
+	mu    sync.Mutex
+	puts  map[string]string // REST path (decoded) → body
+	ctype map[string]string
+}
+
+func newFakeXWiki(t *testing.T) (*fakeXWiki, *httptest.Server) {
+	f := &fakeXWiki{puts: map[string]string{}, ctype: map[string]string{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "admin" || p != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch r.Method {
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			f.puts[r.URL.Path] = string(body)
+			f.ctype[r.URL.Path] = r.Header.Get("Content-Type")
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			if _, ok := f.puts[r.URL.Path]; ok {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return f, srv
+}
+
+func (f *fakeXWiki) page(t *testing.T, path string) string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body, ok := f.puts["/rest/wikis/xwiki/"+path]
+	if !ok {
+		var have []string
+		for k := range f.puts {
+			have = append(have, k)
+		}
+		t.Fatalf("XWiki did not receive %s; got:\n%s", path, strings.Join(have, "\n"))
+	}
+	return body
+}
+
+// Full recovery path into XWiki: fake Confluence → backup → load → import
+// into a fake XWiki REST API. Asserts page placement, link/image rewriting,
+// attachments, tags, comments and the post-import verification.
+func TestPipeline_BackupThenXWikiImport(t *testing.T) {
+	srv := fakeConfluence(t, "")
+	defer srv.Close()
+	dir, err := runBackup(t, srv)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	b, err := model.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	xw, xsrv := newFakeXWiki(t)
+	c, err := xwiki.NewClient(xsrv.URL, "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.MaxRetries = 0
+	rep, err := xwiki.Import(context.Background(), c, b, xwiki.Options{Verify: true})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if len(rep.Failed) > 0 || len(rep.NotFoundAfterImport) > 0 {
+		t.Fatalf("failed=%v notFound=%v", rep.Failed, rep.NotFoundAfterImport)
+	}
+	if rep.Spaces != 1 || rep.Pages != 3 || rep.Folders != 1 || rep.Posts != 1 || rep.Attachments != 2 {
+		t.Errorf("report = %+v", rep)
+	}
+
+	// The Confluence homepage becomes the space's WebHome, titled with the space name.
+	home := xw.page(t, "spaces/KB/pages/WebHome")
+	for _, want := range []string{
+		"<title>Knowledge</title>", "<syntax>xhtml/1.0</syntax>",
+		"Aus Confluence übernommen (Bereich KB)",
+		`href=&#34;/bin/view/KB/Old/&#34;`,              // page link rewritten to XWiki
+		`src=&#34;Bild\.png&#34;`, // embedded image → XWiki attachment reference (escaped)
+		`href=&#34;/bin/download/KB/WebHome/Bild.png&#34;`, // attachment link → download URL
+		`class=&#34;box infomessage&#34;`,                 // info panel → XWiki message box
+		"Kommentare aus Confluence", "root", "reply", "marked",
+	} {
+		if !strings.Contains(home, want) {
+			t.Errorf("homepage lacks %q:\n%s", want, home)
+		}
+	}
+	// Children of the homepage sit below the space; "." gets a safe name; the
+	// archived page is flagged; the folder is a page of its own.
+	if old := xw.page(t, "spaces/KB/spaces/Old/pages/WebHome"); !strings.Contains(old, "archiviert") {
+		t.Errorf("archived page not flagged:\n%s", old)
+	}
+	xw.page(t, "spaces/KB/spaces/Seite-12/pages/WebHome")
+	xw.page(t, "spaces/KB/spaces/Projects/pages/WebHome")
+	// Blog posts under KB/Blog.
+	xw.page(t, "spaces/KB/spaces/Blog/pages/WebHome")
+	xw.page(t, "spaces/KB/spaces/Blog/spaces/2026-05-04 News/pages/WebHome")
+
+	if got := xw.page(t, "spaces/KB/pages/WebHome/attachments/Bild.png"); got != "PNG" {
+		t.Errorf("attachment body = %q", got)
+	}
+	if ct := xw.ctype["/rest/wikis/xwiki/spaces/KB/pages/WebHome/attachments/Bild.png"]; ct != "image/png" {
+		t.Errorf("attachment content type = %q", ct)
+	}
+	tags := xw.page(t, "spaces/KB/pages/WebHome/tags")
+	if !strings.Contains(tags, `name="howto"`) || !strings.Contains(tags, `name="confluence"`) {
+		t.Errorf("tags = %s", tags)
+	}
+}
+
+// Wrong XWiki credentials abort the import at the first request instead of
+// failing every page one by one.
+func TestXWikiImport_AbortsOnAuthFailure(t *testing.T) {
+	srv := fakeConfluence(t, "")
+	defer srv.Close()
+	dir, err := runBackup(t, srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := model.Load(dir)
+	_, xsrv := newFakeXWiki(t)
+	c, _ := xwiki.NewClient(xsrv.URL, "admin", "wrong")
+	c.MaxRetries = 0
+	if _, err := xwiki.Import(context.Background(), c, b, xwiki.Options{}); err == nil {
+		t.Fatal("expected the import to abort on HTTP 401")
+	}
+}
+
+// TestXWikiImport_Live imports the fake backup into a REAL XWiki and checks the
+// result through XWiki's own REST API and renderer. Opt-in: set XWIKI_TEST_URL
+// (e.g. http://127.0.0.1:18080), XWIKI_USER and XWIKI_PASSWORD. Pages go below
+// the parent page "CBImportTest".
+func TestXWikiImport_Live(t *testing.T) {
+	base := os.Getenv("XWIKI_TEST_URL")
+	if base == "" {
+		t.Skip("set XWIKI_TEST_URL, XWIKI_USER and XWIKI_PASSWORD to run against a real XWiki")
+	}
+	user, pass := os.Getenv("XWIKI_USER"), os.Getenv("XWIKI_PASSWORD")
+
+	srv := fakeConfluence(t, "")
+	defer srv.Close()
+	dir, err := runBackup(t, srv)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	b, err := model.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := xwiki.NewClient(base, user, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Import twice: a re-run must overwrite, not duplicate or fail.
+	for run := 1; run <= 2; run++ {
+		rep, err := xwiki.Import(context.Background(), c, b, xwiki.Options{Parent: []string{"CBImportTest"}, Verify: true})
+		if err != nil {
+			t.Fatalf("import run %d: %v", run, err)
+		}
+		if len(rep.Failed) > 0 || len(rep.NotFoundAfterImport) > 0 {
+			t.Fatalf("import run %d: failed=%v notFound=%v", run, rep.Failed, rep.NotFoundAfterImport)
+		}
+		t.Logf("import run %d: %+v", run, rep)
+	}
+
+	get := func(path string) (int, string) {
+		req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+path, nil)
+		req.SetBasicAuth(user, pass)
+		req.Header.Set("Accept", "application/xml")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	// Stored page: title, syntax and content as sent.
+	code, page := get("/rest/wikis/xwiki/spaces/CBImportTest/spaces/KB/pages/WebHome")
+	if code != 200 || !strings.Contains(page, "<syntax>xhtml/1.0</syntax>") || !strings.Contains(page, "<title>Knowledge</title>") {
+		t.Fatalf("stored homepage (HTTP %d):\n%.2000s", code, page)
+	}
+	// Attachment content round-trips.
+	if code, att := get("/rest/wikis/xwiki/spaces/CBImportTest/spaces/KB/pages/WebHome/attachments/Bild.png"); code != 200 || att != "PNG" {
+		t.Errorf("attachment: HTTP %d %q", code, att)
+	}
+	// Tags.
+	if _, tags := get("/rest/wikis/xwiki/spaces/CBImportTest/spaces/KB/pages/WebHome/tags"); !strings.Contains(tags, "howto") {
+		t.Errorf("tags: %s", tags)
+	}
+	// Rendered by XWiki (content only, no skin): the xhtml/1.0 content must
+	// actually render, with rewritten links and images.
+	code, html := get("/bin/get/CBImportTest/KB/WebHome?xpage=plain&outputSyntax=html")
+	if code != 200 {
+		t.Fatalf("render: HTTP %d\n%.1500s", code, html)
+	}
+	for _, want := range []string{"Hinweis", "Aufgeklappt", "FERTIG", "Erledigt", "Ä Ö Ü",
+		"if a &lt; b &amp;&amp; c &gt; d", "/CBImportTest/KB/Old/", "Kommentare aus Confluence",
+		`src="/bin/download/CBImportTest/KB/WebHome/Bild.png`,  // image rendered from the attachment reference
+		`href="/bin/download/CBImportTest/KB/WebHome/Bild.png`, // attachment link
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered page lacks %q", want)
+		}
+	}
+	if t.Failed() {
+		t.Logf("rendered page:\n%.4000s", html)
 	}
 }
