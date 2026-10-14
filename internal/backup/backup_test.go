@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/kAYd9iN/confluence-backup/internal/api"
+	"github.com/kAYd9iN/confluence-backup/internal/export"
+	"github.com/kAYd9iN/confluence-backup/internal/model"
 )
 
 // fakeConfluence serves a small space with everything the backup must keep:
@@ -45,7 +47,7 @@ func fakeConfluence(t *testing.T, failPath string) *httptest.Server {
 		case "/wiki/api/v2/spaces/1/pages":
 			list(w,
 				map[string]any{"id": "10", "title": "Home", "status": "current", "position": 0,
-					"authorId": "u1", "version": map[string]any{"number": 3, "authorId": "u2"}, "body": body("<p>home</p>")},
+					"authorId": "u1", "version": map[string]any{"number": 3, "authorId": "u2"}, "body": body(homeBody)},
 				map[string]any{"id": "11", "title": "Old", "status": "archived", "parentId": "10", "parentType": "page",
 					"position": 1, "body": body("<p>old</p>")},
 				map[string]any{"id": "12", "title": ".", "status": "current", "parentId": "10", "parentType": "page",
@@ -103,6 +105,16 @@ func sendJSON(w http.ResponseWriter, v any) {
 	enc.Encode(v)
 }
 
+// homeBody is the storage-format body of the fake space's homepage: links to
+// a page that exists and one that does not, an embedded attachment image, a
+// macro with an equivalent and one without.
+const homeBody = `<p>home</p>` +
+	`<p><ac:link><ri:page ri:content-title="Old"/><ac:plain-text-link-body><![CDATA[zur alten Seite]]></ac:plain-text-link-body></ac:link></p>` +
+	`<ac:image ac:alt="Bild"><ri:attachment ri:filename="Bild.png"/></ac:image>` +
+	`<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Hinweis</p></ac:rich-text-body></ac:structured-macro>` +
+	`<ac:structured-macro ac:name="children"/>` +
+	`<p><ac:link><ri:page ri:content-title="Gelöscht"/></ac:link></p>`
+
 func runBackup(t *testing.T, srv *httptest.Server) (string, error) {
 	t.Helper()
 	client := api.NewClient(srv.URL, "u@example.com", "tok")
@@ -137,7 +149,7 @@ func TestRun_BacksUpEverythingARestoreNeeds(t *testing.T) {
 		}
 	}
 
-	if got := readFile(t, dir, "spaces/KB/pages/Home/index.html"); got != "<p>home</p>" {
+	if got := readFile(t, dir, "spaces/KB/pages/Home/index.html"); got != homeBody {
 		t.Errorf("Home body = %q", got)
 	}
 	meta := readFile(t, dir, "spaces/KB/pages/Home/page.json")
@@ -220,4 +232,72 @@ func TestRun_FailedFetchIsRecordedAndReported(t *testing.T) {
 	}
 	// Everything else is still backed up.
 	readFile(t, dir, "spaces/KB/pages/Home/index.html")
+}
+
+// The full disaster-recovery path: back up a (fake) Confluence, load the
+// backup, export it as a static site — links, images and comments must work.
+func TestPipeline_BackupThenExport(t *testing.T) {
+	srv := fakeConfluence(t, "")
+	defer srv.Close()
+	dir, err := runBackup(t, srv)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	b, err := model.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Spaces) != 1 {
+		t.Fatalf("spaces = %d", len(b.Spaces))
+	}
+	sp := b.Spaces[0]
+	if len(sp.Roots) == 0 || sp.Roots[0].ID != "10" {
+		t.Fatalf("homepage must lead the tree, roots = %v", sp.Roots)
+	}
+	// The folder from the search is part of the tree (below the homepage).
+	if f := sp.ByID("f1"); f == nil || f.Kind != model.KindFolder || f.Parent == nil || f.Parent.ID != "10" {
+		t.Errorf("folder f1 not placed below the homepage: %+v", f)
+	}
+
+	// CONFLUENCE_EXPORT_PREVIEW=<dir> keeps the exported site for a look in a browser.
+	site := os.Getenv("CONFLUENCE_EXPORT_PREVIEW")
+	if site == "" {
+		site = t.TempDir()
+	}
+	report, err := export.Export(b, site)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if report.Pages != 3 || report.Posts != 1 || report.Attachments != 2 {
+		t.Errorf("report = %+v", report)
+	}
+
+	home := readFile(t, site, "KB/p/10.html")
+	for _, want := range []string{
+		`<a href="../../KB/p/11.html">zur alten Seite</a>`, // page link resolved
+		`<img src="../../KB/f/10/Bild.png" alt="Bild"/>`,   // embedded image resolved
+		`<div class="panel panel-info"><p>Hinweis</p></div>`,
+		`[Makro: children]`,
+		`<span class="unresolved-link">Gelöscht</span>`,
+		`Kommentare`, `root`, `reply`, // comment thread with reply
+		`marked`,     // inline comment selection
+		`Archiviert`, // archived child listed under Unterseiten
+	} {
+		if !strings.Contains(home, want) {
+			t.Errorf("exported homepage lacks %q", want)
+		}
+	}
+	if got := readFile(t, site, "KB/f/10/Bild.png"); got != "PNG" {
+		t.Errorf("exported attachment = %q", got)
+	}
+	readFile(t, site, "KB/b/20.html")
+	idx := readFile(t, site, "KB/index.html")
+	if !strings.Contains(idx, "Projects") || !strings.Contains(idx, "News") {
+		t.Errorf("space index lacks folder or blog post:\n%s", idx)
+	}
+	rep := readFile(t, site, "export-report.txt")
+	if !strings.Contains(rep, "Gelöscht") || !strings.Contains(rep, "children") {
+		t.Errorf("report lacks unresolved link or placeholder:\n%s", rep)
+	}
 }

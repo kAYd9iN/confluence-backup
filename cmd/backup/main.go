@@ -25,6 +25,9 @@ func run(args []string) int {
 	if len(args) > 0 && args[0] == "verify" {
 		return runVerify(args[1:])
 	}
+	if len(args) > 0 && args[0] == "export" {
+		return runExport(args[1:])
+	}
 
 	fs := flag.NewFlagSet("confluence-backup", flag.ExitOnError)
 	domain := fs.String("domain", "", "Atlassian domain (e.g. myorg.atlassian.net)")
