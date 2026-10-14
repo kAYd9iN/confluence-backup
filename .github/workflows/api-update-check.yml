@@ -5,8 +5,20 @@ on:
     - cron: '0 6 * * *'  # daily 06:00 UTC
   workflow_dispatch:
 
-# Least privilege: read-only at the workflow level; the write scopes the check
-# job needs (push drift branch, open labelled PR) are granted on the job.
+# Least privilege: read-only at the workflow level; each job declares only what
+# it needs.
+#
+# Trust boundaries — drift.diff is derived from Atlassian's published OpenAPI
+# specs, which makes it untrusted input for the Claude prompt. The pipeline is
+# split so that code produced from that input never runs where a write-scoped
+# credential is reachable:
+#   check  — detects drift; Claude adapts the code. No persisted git
+#            credentials; Claude may read/edit and run `go build`/`go vet`, but
+#            not `go test` (tests execute arbitrary code). Output: a patch.
+#   verify — applies the patch and runs build + race tests. Read-only token,
+#            no secrets, no OIDC.
+#   pr     — commits the verified patch and opens the PR. The only job that sees
+#            REPO_PAT; it runs no code from the patch.
 permissions:
   contents: read
 
@@ -14,20 +26,19 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write  # claude-code-action authenticates via OIDC
+      contents: read
+      pull-requests: read  # look for an already open api-drift PR
+      id-token: write      # claude-code-action authenticates via OIDC
+    outputs:
+      drift: ${{ steps.check.outputs.exit_code == '1' }}
+      snapshot_changed: ${{ steps.check.outputs.snapshot_changed }}
+      open_pr: ${{ steps.open.outputs.number }}
+      claude_ran: ${{ steps.adapt.outcome == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Credentials must persist — this job pushes the drift branch.
-          # REPO_PAT (optional): pushing the drift branch with a PAT lets CI run
-          # on the auto-created PR. With the default GITHUB_TOKEN, workflows are
-          # not triggered on pushes made by workflows (GitHub recursion guard).
-          persist-credentials: true
-          token: ${{ secrets.REPO_PAT || github.token }}
+          persist-credentials: false
 
       # The check compares Atlassian's published OpenAPI specs against the
       # committed baseline — no Confluence instance or credentials needed.
@@ -51,6 +62,20 @@ jobs:
             echo "snapshot_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # One drift PR at a time: while one is open, the same drift would be
+      # reported again every day.
+      - name: Find open drift PR
+        id: open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh pr list --repo "$GITHUB_REPOSITORY" --label api-drift --state open \
+                --json number --jq '.[0].number // empty')
+          echo "number=$n" >> "$GITHUB_OUTPUT"
+          if [ -n "$n" ]; then
+            echo "::notice::Drift PR #$n is still open — not opening another one. Merge or close it first."
+          fi
+
       - name: Detect Claude credentials
         id: anthropic
         env:
@@ -64,18 +89,20 @@ jobs:
           fi
 
       - name: Setup Go
-        if: steps.check.outputs.exit_code == '1'
+        if: steps.check.outputs.exit_code == '1' && steps.open.outputs.number == ''
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
           go-version: '1.26'
           check-latest: true  # use the newest 1.26 patch, not the runner's cached one
-          cache: true
+          cache: false        # never save a cache from a job that builds untrusted edits
 
       # On drift: let Claude adapt the tool to the API changes (new/removed
-      # fields → internal/api/confluence.go structs + fetch functions), then
-      # the verification step below runs the full test suite.
+      # fields → internal/api/confluence.go). Tests run in the separate verify job.
       - name: Adapt tool to API changes (Claude)
-        if: steps.check.outputs.exit_code == '1' && steps.anthropic.outputs.present == 'true'
+        id: adapt
+        if: >-
+          steps.check.outputs.exit_code == '1' && steps.open.outputs.number == '' &&
+          steps.anthropic.outputs.present == 'true'
         uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029  # v1
         with:
           # Either secret works: ANTHROPIC_API_KEY (Console/pay-per-token) or
@@ -90,36 +117,120 @@ jobs:
 
             Adapt the tool to the API changes:
             1. Read `drift.diff` to see which fields/endpoints were added or removed.
-            2. Update the corresponding structs and fetch functions in
-               `internal/api/confluence.go` so newly added fields are backed up
-               and removed fields no longer break parsing.
+            2. Update `internal/api/confluence.go` so removed fields or endpoints
+               no longer break the backup. Objects are stored as raw JSON, so new
+               fields are backed up automatically — only change code where the
+               backup logic itself reads a field.
             3. Follow the conventions in CLAUDE.md ("Extending: Adding a New Data Type").
-            4. Run `go test ./...` and fix any failures you introduced.
+            4. Run `go build ./...` and `go vet ./...` and fix any errors you
+               introduced. The workflow runs the test suite afterwards in a
+               separate job.
             Do NOT commit — the workflow commits for you. Do NOT modify workflows,
-            scripts, or anything outside internal/ and docs/api-snapshot.json.
-          claude_args: '--max-turns 30'
+            scripts, or anything outside internal/ and docs/api-snapshot.json;
+            other changes are discarded.
+          # Explicit tool allowlist: no general shell, no `go test`/`go run`
+          # (both execute code), no network tools.
+          claude_args: >-
+            --max-turns 30
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(go build:*),Bash(go vet:*)"
 
-      - name: Verify build and tests after adaptation
-        if: steps.check.outputs.exit_code == '1'
+      # Only the paths the workflow is allowed to change make it into the patch.
+      - name: Collect patch
+        if: steps.open.outputs.number == '' && (steps.check.outputs.exit_code == '1' || steps.check.outputs.snapshot_changed == 'true')
+        run: |
+          set -euo pipefail
+          git add -A -- docs/api-snapshot.json internal/
+          git diff --cached --binary > changes.patch
+          touch drift.diff
+          echo "Patch: $(git diff --cached --stat | tail -1)"
+
+      - name: Upload patch
+        if: steps.open.outputs.number == '' && (steps.check.outputs.exit_code == '1' || steps.check.outputs.snapshot_changed == 'true')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: api-drift-patch
+          path: |
+            changes.patch
+            drift.diff
+          retention-days: 7
+
+  verify:
+    needs: check
+    if: needs.check.outputs.open_pr == '' && needs.check.outputs.drift == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: api-drift-patch
+
+      - name: Apply patch
+        run: |
+          if [ -s changes.patch ]; then git apply --index changes.patch; fi
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: '1.26'
+          check-latest: true
+          cache: false  # untrusted test code runs here; don't let it seed the shared cache
+
+      - name: Build and race tests
         run: |
           go build -mod=vendor ./...
           go test -race -cover ./...
 
+  pr:
+    needs: [check, verify]
+    # verify is skipped for a first-run baseline (no drift, only a new snapshot).
+    if: >-
+      always() && needs.check.result == 'success' &&
+      needs.check.outputs.open_pr == '' &&
+      (needs.check.outputs.drift == 'true' || needs.check.outputs.snapshot_changed == 'true') &&
+      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # This job pushes the drift branch. REPO_PAT (optional): a push made
+          # with a PAT lets CI run on the new PR; pushes made with the default
+          # GITHUB_TOKEN don't trigger workflows (GitHub recursion guard).
+          # No code from the patch runs in this job.
+          persist-credentials: true
+          token: ${{ secrets.REPO_PAT || github.token }}
+
+      - name: Download patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: api-drift-patch
+          path: ${{ runner.temp }}/drift
+
       - name: Create pull request (drift or new baseline)
-        if: steps.check.outputs.exit_code == '1' || steps.check.outputs.snapshot_changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.REPO_PAT || github.token }}
-          DRIFT: ${{ steps.check.outputs.exit_code }}
-          CLAUDE_RAN: ${{ steps.anthropic.outputs.present }}
+          DRIFT: ${{ needs.check.outputs.drift }}
+          CLAUDE_RAN: ${{ needs.check.outputs.claude_ran }}
+          PATCH_DIR: ${{ runner.temp }}/drift
         run: |
           set -euo pipefail
           BRANCH="api-drift/$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add docs/api-snapshot.json internal/
+          git apply --index "$PATCH_DIR/changes.patch"
 
-          if [ "$DRIFT" = "1" ]; then
+          if [ "$DRIFT" = "true" ]; then
             TITLE="fix: adapt to Confluence API drift ($(date -u +%Y-%m-%d))"
           else
             TITLE="chore: commit initial API schema baseline"
@@ -130,34 +241,34 @@ jobs:
           {
             echo "## Confluence API schema update"
             echo
-            if [ "$DRIFT" = "1" ]; then
+            if [ "$DRIFT" = "true" ]; then
               echo "The daily API schema check found drift against the stored baseline."
               if [ "$CLAUDE_RAN" = "true" ]; then
-                echo "Claude adapted \`internal/api/confluence.go\` to the changes; build and race tests passed."
+                echo "Claude adapted the tool to the changes; build and race tests passed in an isolated job."
               else
-                echo "**No Claude credentials configured** (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN) — only the snapshot was updated."
+                echo "**Claude did not run** (no ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN) — only the snapshot was updated."
                 echo "Review whether \`internal/api/confluence.go\` needs changes for the new fields."
               fi
               echo
               echo '### Drift'
               echo '```diff'
-              cat drift.diff 2>/dev/null || echo "(diff unavailable)"
+              cat "$PATCH_DIR/drift.diff" 2>/dev/null || echo "(diff unavailable)"
               echo '```'
             else
               echo "First run: committing \`docs/api-snapshot.json\` as the drift-detection baseline."
             fi
             echo
             echo "Merging this PR triggers the auto-release workflow (api-drift label)."
-          } > pr-body.md
+          } > "$RUNNER_TEMP/pr-body.md"
 
           gh pr create \
             --title "$TITLE" \
             --label "api-drift" \
-            --body-file pr-body.md
+            --body-file "$RUNNER_TEMP/pr-body.md"
 
           # Auto-merge only for snapshot-only PRs. If Claude changed Go code,
-          # require a human review — drift.diff is derived from Confluence API
-          # responses (untrusted input for the adaptation prompt), so code
+          # require a human review — drift.diff is derived from external API
+          # documentation (untrusted input for the adaptation prompt), so code
           # changes must not reach main unreviewed.
           if git diff --name-only HEAD~1 HEAD | grep -q '^internal/'; then
             echo "::notice::Code changes included — skipping auto-merge, human review required."
