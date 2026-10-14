@@ -114,9 +114,10 @@ reads). Never reduce an object to a hand-picked struct when writing it.
 ```
 api-update-check (daily 06:00 UTC — no credentials needed)
   → compares Atlassian's PUBLISHED OpenAPI specs against docs/api-snapshot.json
-  → drift detected → Claude adapts internal/api/confluence.go
-    (needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
-  → PR with label api-drift (auto-merge only if snapshot-only;
+  → drift detected → job `check`: Claude adapts internal/api/confluence.go
+    (needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) → patch artifact
+  → job `verify`: build + race tests on the patch (read-only, no secrets)
+  → job `pr`: PR with label api-drift (auto-merge only if snapshot-only;
     Go code changes always require human review — prompt-injection guard)
   → merge → auto-release bumps 0ver minor + pushes tag
   → release workflow: security-gate (govulncheck, gosec, race tests, CBOM NIST
@@ -129,6 +130,12 @@ api-update-check (daily 06:00 UTC — no credentials needed)
 - Baseline: `docs/api-snapshot.json` (committed); sentinel `__ENDPOINT_MISSING__`
   marks endpoints the tool calls that are no longer documented (currently: none)
 - Exit 2 (spec download failed) fails the job; no snapshot is written
+- Trust split: `drift.diff` comes from Atlassian's public specs (untrusted). The
+  `check` job has no persisted git credentials, and Claude is limited to Read/Edit/
+  Write/Glob/Grep + `go build`/`go vet` (no `go test`, it executes code). Tests run
+  in `verify` (no secrets, no OIDC, no Go cache). Only `pr` sees REPO_PAT, and it
+  runs no patch code. Only `docs/api-snapshot.json` and `internal/` enter the patch
+- One drift PR at a time: while an `api-drift` PR is open, the check only reports
 
 ## Dependency Updates (Dependabot)
 
