@@ -38,7 +38,10 @@ reads). Never reduce an object to a hand-picked struct when writing it.
 | `internal/backup/backup.go` | Orchestration, two-level worker pool (3 spaces × cap 20 pages) |
 | `internal/backup/manifest.go` | SHA256 per file + HMAC-SHA-256 .sig, sync.Mutex protected |
 | `internal/storage/writer.go` | Hierarchical writer, 0600 files, path-traversal + symlink protection |
-| `cmd/backup/main.go` | CLI entry point |
+| `cmd/backup/main.go` | CLI entry point (`verify`, `export` subcommands) |
+| `internal/model/model.go` | Loads a backup dir: spaces, page tree from parentId (incl. folders), posts, attachments, comments, users |
+| `internal/convert/convert.go` | Confluence storage format → clean, well-formed, sanitized XHTML; links/images via a `Resolver`; reports unresolved refs + macro placeholders |
+| `internal/export/export.go` | Static HTML site from a loaded backup (disaster-recovery read access) |
 | `scripts/check-api-schema.sh` | Credential-free API drift check vs published OpenAPI spec |
 | `scripts/check-cbom.sh` | Anti-staleness: every crypto import must be in the CBOM |
 | `docs/cbom.cdx.json` | CycloneDX 1.6 Cryptography BoM (hand-authored) |
@@ -155,6 +158,17 @@ verified nothing.
 - ✅ "Allow auto-merge" enabled; `main-protection` ruleset active (PR + checks +
   squash-only); Actions cannot approve PRs
 - Optional, still open: SCORECARD_TOKEN (improves Branch-Protection check only)
+
+## Disaster recovery: export / import
+
+- `convert` must never drop content silently: macros without an equivalent keep their
+  body and get a visible placeholder; both placeholders and unresolved links are reported.
+  Output must stay well-formed XML (XWiki imports it as xhtml/1.0) — a test parses it strictly
+- `encoding/xml` (non-strict, HTML entities) parses storage format; do NOT use
+  `xml.HTMLAutoClose` — it lists "link"/"param" and AutoClose matches local names, so
+  `<ac:link>` would become void
+- The pipeline test `TestPipeline_BackupThenExport` (internal/backup) runs fake Confluence →
+  backup → model.Load → export; `CONFLUENCE_EXPORT_PREVIEW=<dir>` keeps the site for a look
 
 ## Extending: Adding a New Data Type
 

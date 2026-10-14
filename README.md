@@ -111,6 +111,7 @@ confluence-backup verify --dir ./backups/2026-03-08T12-00-00
 ```
 confluence-backup [Optionen]
 confluence-backup verify --dir <path>
+confluence-backup export --dir <path> --out <site-dir>
 
 Optionen:
   --domain DOMAIN        Atlassian-Domain (z.B. myorg.atlassian.net) [erforderlich]
@@ -122,6 +123,27 @@ Optionen:
   --timeout DURATION     Gesamt-Timeout (Standard: 4h)
   --version              Version anzeigen
 ```
+
+## Notfall: Backup ohne Confluence lesen
+
+Ist Confluence nicht mehr verfügbar, macht `export` aus einem Backup eine
+**statische Website**, die in jedem Browser ohne Server und ohne Wiki lesbar ist:
+
+```bash
+confluence-backup verify --dir ./backups/2026-03-08T12-00-00   # Integrität prüfen
+confluence-backup export --dir ./backups/2026-03-08T12-00-00 --out ./notfall-site
+# danach ./notfall-site/index.html im Browser öffnen
+```
+
+- Alle Bereiche mit Seitenbaum (inkl. Ordner und archivierter Seiten) und Blogposts
+- Pro Seite: Inhalt, Autor/Datum, Labels, Unterseiten, Anhänge, Kommentare mit Antworten
+  und Inline-Kommentare samt markiertem Text
+- Links zwischen Seiten und eingebettete Bilder zeigen auf die exportierten Dateien
+- `export-report.txt` listet, was nicht 1:1 übertragbar war: Makros ohne Entsprechung
+  (als Platzhalter dargestellt, ihr Inhalt bleibt erhalten) und Verweise auf Seiten,
+  die nicht im Backup sind
+
+`export` liest nur das Backup — kein Netzwerk, keine Zugangsdaten.
 
 ## Ausgabestruktur
 
