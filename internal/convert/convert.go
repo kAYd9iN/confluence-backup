@@ -24,6 +24,9 @@ type Resolver interface {
 	BlogPost(spaceKey, title, postingDay string) (url string, ok bool)
 	Content(contentID string) (url string, ok bool)
 	Attachment(spaceKey, pageTitle, filename string) (url string, ok bool)
+	// Image returns the src for an attachment shown as an image. It may differ
+	// from Attachment: XWiki, for one, expects an attachment reference there.
+	Image(spaceKey, pageTitle, filename string) (src string, ok bool)
 	User(accountID string) (displayName string)
 }
 
@@ -335,8 +338,8 @@ func (c *converter) wrap(n *node, class string) {
 	c.close("div")
 }
 
-// target resolves the ri: reference inside a link or image.
-func (c *converter) target(n *node) (url, label string, ok bool) {
+// target resolves the ri: reference inside a link or (image=true) an image.
+func (c *converter) target(n *node, image bool) (url, label string, ok bool) {
 	if p := n.child("ri", "page"); p != nil {
 		space, title := p.get("ri", "space-key"), p.get("ri", "content-title")
 		url, ok = c.r.Page(space, title)
@@ -362,7 +365,7 @@ func (c *converter) target(n *node) (url, label string, ok bool) {
 		return url, "", ok
 	}
 	if a := n.child("ri", "attachment"); a != nil {
-		return c.attachment(a)
+		return c.attachment(a, image)
 	}
 	if u := n.child("ri", "url"); u != nil {
 		v := safeURL(u.get("ri", "value"))
@@ -379,8 +382,9 @@ func (c *converter) target(n *node) (url, label string, ok bool) {
 	return "", "", false
 }
 
-// attachment resolves ri:attachment, optionally on another page (nested ri:page).
-func (c *converter) attachment(a *node) (url, label string, ok bool) {
+// attachment resolves ri:attachment, optionally on another page (nested
+// ri:page), as a link target or (image=true) as an image source.
+func (c *converter) attachment(a *node, image bool) (url, label string, ok bool) {
 	file := a.get("ri", "filename")
 	space, page := "", ""
 	if p := a.child("ri", "page"); p != nil {
@@ -388,7 +392,11 @@ func (c *converter) attachment(a *node) (url, label string, ok bool) {
 	} else if p := a.child("ri", "blog-post"); p != nil {
 		space, page = p.get("ri", "space-key"), p.get("ri", "content-title")
 	}
-	url, ok = c.r.Attachment(space, page, file)
+	if image {
+		url, ok = c.r.Image(space, page, file)
+	} else {
+		url, ok = c.r.Attachment(space, page, file)
+	}
 	if !ok {
 		where := file
 		if page != "" {
@@ -417,7 +425,7 @@ func (c *converter) link(n *node) {
 		c.close("span")
 		return
 	}
-	url, label, ok := c.target(n)
+	url, label, ok := c.target(n, false)
 	if anchor := n.get("ac", "anchor"); anchor != "" {
 		if !ok && url == "" && n.child("ri", "page") == nil && n.child("ri", "attachment") == nil {
 			url, ok = "", true // anchor on the same page
@@ -453,7 +461,7 @@ func anchorID(name string) string {
 }
 
 func (c *converter) image(n *node) {
-	url, label, ok := c.target(n)
+	url, label, ok := c.target(n, true)
 	if !ok {
 		c.open("span", "class", "unresolved-image")
 		c.text("[Bild: " + label + "]")
@@ -575,7 +583,7 @@ func (c *converter) macro(n *node) {
 		name == "viewppt" || name == "multimedia" || name == "view-file-macro":
 		if pn := p["name"]; pn != nil {
 			if a := pn.child("ri", "attachment"); a != nil {
-				url, file, ok := c.attachment(a)
+				url, file, ok := c.attachment(a, false)
 				if ok {
 					c.open("p", "class", "attachment-link")
 					c.open("a", "href", url)
@@ -593,7 +601,7 @@ func (c *converter) macro(n *node) {
 		if diagram == "" {
 			diagram = param(p, "name")
 		}
-		if url, ok := c.r.Attachment("", "", diagram+".png"); ok && diagram != "" {
+		if url, ok := c.r.Image("", "", diagram+".png"); ok && diagram != "" {
 			c.void("img", "src", url, "alt", diagram, "title", "Diagramm: "+diagram)
 			return
 		}

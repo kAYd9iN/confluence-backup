@@ -175,6 +175,16 @@ verified nothing.
   appended to the content (XWiki comment objects would need xwiki/2.1 escaping), origin note
   with author/date (REST sets the importing user). Idempotent PUTs. Credentials only via
   XWIKI_USER/XWIKI_PASSWORD or Windows target `xwiki-import`; 401/403 aborts immediately
+- Learned against a real XWiki 17.10 (not visible with the fake API):
+  - xhtml/1.0 content must be a full document with ONE root element — `putPage` wraps it
+    in `<html xmlns=…><body>…</body></html>`, otherwise rendering fails
+  - `<img src>` without a scheme is read as an ATTACHMENT NAME of the current page, so
+    images use XWiki attachment references (`Resolver.Image`: `file` or
+    `Space.Page.WebHome@file`, escaped), while links keep `/bin/view|download/…` URLs
+- `TestXWikiImport_Live` (opt-in: XWIKI_TEST_URL, XWIKI_USER, XWIKI_PASSWORD) imports twice
+  into a real XWiki and checks storage, attachment, tags and the rendered page. Quick setup:
+  `xwiki:lts-postgres-tomcat` + `postgres` via compose, enable `xwiki.superadminpassword`
+  in WEB-INF/xwiki.cfg (the REST API works before the distribution wizard)
 
 ## Extending: Adding a New Data Type
 

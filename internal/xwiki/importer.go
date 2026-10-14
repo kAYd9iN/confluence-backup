@@ -171,6 +171,14 @@ func (im *importer) assign(ps []*model.Page, parent []string, used map[string]bo
 	}
 }
 
+// onDay renders " am YYYY-MM-DD", or nothing when the date is unknown.
+func onDay(ts string) string {
+	if d := dayOf(ts); d != "" {
+		return " am " + d
+	}
+	return ""
+}
+
 func dayOf(ts string) string {
 	if len(ts) >= 10 {
 		return ts[:10]
@@ -264,6 +272,39 @@ func (r resolver) Attachment(spaceKey, pageTitle, filename string) (string, bool
 	return r.im.downloadURL(r.im.loc[p], filename), true
 }
 
+// Image returns an XWiki attachment reference: XWiki's xhtml/1.0 parser reads
+// an <img src> without scheme as an attachment of the current page — a URL
+// path would be taken as a (non-existent) file name. Same page: the escaped
+// file name; other page: "Space.Sub.WebHome@file".
+func (r resolver) Image(spaceKey, pageTitle, filename string) (string, bool) {
+	p := r.page
+	if pageTitle != "" {
+		k := r.spaceKey(spaceKey)
+		if p = r.im.titles[k][pageTitle]; p == nil {
+			if p = r.im.posts[k][pageTitle]; p == nil {
+				return "", false
+			}
+		}
+	}
+	if a, ok := p.AttachmentByName(filename); !ok || a.Path == "" {
+		return "", false
+	}
+	file := escapeRef(filename)
+	if p == r.page {
+		return file, true
+	}
+	segs := make([]string, len(r.im.loc[p]))
+	for i, s := range r.im.loc[p] {
+		segs[i] = escapeRef(s)
+	}
+	return strings.Join(segs, ".") + ".WebHome@" + file, true
+}
+
+// escapeRef escapes the characters with a meaning in XWiki entity references.
+func escapeRef(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `.`, `\.`, `@`, `\@`, `:`, `\:`).Replace(s)
+}
+
 func (r resolver) User(id string) string { return r.im.b.Users[id] }
 
 // --- writing ---
@@ -284,8 +325,12 @@ type tagXML struct {
 	Name string `xml:"name,attr"`
 }
 
+// putPage writes a page. XWiki's xhtml/1.0 parser needs a complete XHTML
+// document with a single root element — a bare fragment with several
+// top-level elements fails to render ("markup following the root element").
 func (im *importer) putPage(ctx context.Context, segs []string, title, content string) error {
-	body, err := xml.Marshal(pageXML{Title: title, Syntax: "xhtml/1.0", Content: content})
+	doc := `<html xmlns="http://www.w3.org/1999/xhtml"><body>` + content + `</body></html>`
+	body, err := xml.Marshal(pageXML{Title: title, Syntax: "xhtml/1.0", Content: doc})
 	if err != nil {
 		return err
 	}
@@ -480,11 +525,11 @@ func (im *importer) user(id string) string {
 func (im *importer) content(p *model.Page) (string, error) {
 	esc := html.EscapeString
 	var b strings.Builder
-	origin := fmt.Sprintf("Aus Confluence übernommen (Bereich %s). Ursprünglich erstellt von %s am %s",
-		p.Space.Key, im.user(p.AuthorID), dayOf(p.CreatedAt))
+	origin := fmt.Sprintf("Aus Confluence übernommen (Bereich %s). Ursprünglich erstellt von %s%s",
+		p.Space.Key, im.user(p.AuthorID), onDay(p.CreatedAt))
 	if p.VersionNumber > 0 {
-		origin += fmt.Sprintf("; Version %d, zuletzt geändert von %s am %s",
-			p.VersionNumber, im.user(p.VersionAuthorID), dayOf(p.VersionCreatedAt))
+		origin += fmt.Sprintf("; Version %d, zuletzt geändert von %s%s",
+			p.VersionNumber, im.user(p.VersionAuthorID), onDay(p.VersionCreatedAt))
 	}
 	b.WriteString(`<p class="confluence-origin"><em>` + esc(origin+".") + "</em></p>")
 	if p.Status == "archived" {
@@ -516,7 +561,7 @@ func (im *importer) content(p *model.Page) (string, error) {
 func (im *importer) comment(p *model.Page, c model.Comment) string {
 	esc := html.EscapeString
 	var b strings.Builder
-	meta := im.user(c.AuthorID) + " am " + dayOf(c.CreatedAt)
+	meta := im.user(c.AuthorID) + onDay(c.CreatedAt)
 	if c.Inline {
 		meta += " (Inline-Kommentar"
 		if c.Resolution != "" {

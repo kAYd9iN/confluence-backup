@@ -248,6 +248,10 @@ func (r resolver) Attachment(spaceKey, pageTitle, filename string) (string, bool
 	return up + key(p.Space) + "/f/" + storage.SanitizeName(p.ID) + "/" + name, true
 }
 
+func (r resolver) Image(spaceKey, pageTitle, filename string) (string, bool) {
+	return r.Attachment(spaceKey, pageTitle, filename)
+}
+
 func (r resolver) User(id string) string { return r.e.b.Users[id] }
 
 // --- page rendering ---
