@@ -29,6 +29,38 @@ func newHTTPClient() *http.Client {
 	}
 }
 
+// newDownloadHTTPClient is used for attachment files. It has no overall
+// timeout — a large file may legitimately take longer than 30 s; the context
+// bounds the run — but waits at most 60 s for the response headers.
+// Redirects (Confluence answers downloads with a redirect to its media
+// service) must stay on HTTPS and on an Atlassian host, or on the original
+// host. Go drops the Authorization header when a redirect changes the host.
+func newDownloadHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: false,
+			},
+			ResponseHeaderTimeout: 60 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			if req.URL.Host == via[0].URL.Host {
+				return nil
+			}
+			host := req.URL.Hostname()
+			if req.URL.Scheme != "https" ||
+				!(strings.HasSuffix(host, ".atlassian.com") || strings.HasSuffix(host, ".atlassian.net")) {
+				return fmt.Errorf("refusing download redirect to %s://%s", req.URL.Scheme, host)
+			}
+			return nil
+		},
+	}
+}
+
 // 10 requests/second, burst of 20 — conservative for Confluence Cloud.
 var rateLimit = rate.Every(100 * time.Millisecond)
 
@@ -53,6 +85,7 @@ type Client struct {
 	email      string
 	token      string
 	auth       authMode
+	dlClient   *http.Client // attachment downloads: no overall timeout
 	limiter    *rate.Limiter
 	MaxRetries int
 	RetryDelay time.Duration
@@ -69,6 +102,7 @@ func NewClient(domain, email, token string) *Client {
 	}
 	return &Client{
 		httpClient: newHTTPClient(),
+		dlClient:   newDownloadHTTPClient(),
 		baseURL:    baseURL,
 		email:      email,
 		token:      token,
@@ -89,6 +123,7 @@ func NewClientBearer(baseURL, token string) *Client {
 	}
 	return &Client{
 		httpClient: newHTTPClient(),
+		dlClient:   newDownloadHTTPClient(),
 		baseURL:    baseURL,
 		token:      token,
 		auth:       authBearer,
@@ -138,11 +173,17 @@ func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
 	return nil, fmt.Errorf("after %d retries: %w", c.MaxRetries, lastErr)
 }
 
+// DownloadPath streams a binary response from an API path below the client's
+// base URL (e.g. AttachmentDownloadPath). Caller MUST close the ReadCloser.
+func (c *Client) DownloadPath(ctx context.Context, path string) (io.ReadCloser, error) {
+	return c.Download(ctx, c.baseURL+path)
+}
+
 // Download streams a binary response from a full URL (for attachment files).
 // The URL must be on the same host as the client domain — SSRF protection.
 // Caller MUST close the returned ReadCloser.
 // No body size limit is enforced — attachment files can be arbitrarily large by
-// design. Operators should ensure sufficient disk space before enabling --attachments.
+// design. Operators should ensure sufficient disk space (or pass --attachments=false).
 // Retries on 429 and 5xx, same as Get().
 func (c *Client) Download(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 	// Validate that the URL stays on the expected host (SSRF protection, #7).
@@ -192,7 +233,7 @@ func (c *Client) doDownload(ctx context.Context, rawURL string) (io.ReadCloser, 
 		req.SetBasicAuth(c.email, c.token)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.dlClient.Do(req)
 	if err != nil {
 		return nil, true, err // network errors are retryable
 	}

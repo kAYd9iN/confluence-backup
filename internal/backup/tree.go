@@ -27,10 +27,19 @@ func BuildTree(pages []api.Page) []*PageNode {
 		nodes[pages[i].ID] = &PageNode{Page: pages[i]}
 	}
 
+	// Walk in API order, not map order, so sibling order — and with it which
+	// of two same-titled pages gets the ID suffix — is stable between runs.
 	var roots []*PageNode
-	for _, n := range nodes {
+	placed := make(map[string]bool, len(pages))
+	for i := range pages {
+		id := pages[i].ID
+		if placed[id] {
+			continue // the API listed the same page twice
+		}
+		placed[id] = true
+		n := nodes[id]
 		parentID := n.Page.ParentID
-		if parentID == "" {
+		if parentID == "" || parentID == id {
 			roots = append(roots, n)
 			continue
 		}
@@ -43,18 +52,55 @@ func BuildTree(pages []api.Page) []*PageNode {
 		parent.Children = append(parent.Children, n)
 	}
 
+	// A parent cycle (A under B, B under A) leaves pages unreachable from any
+	// root; they would silently not be written. Promote one page per cycle.
+	reached := map[*PageNode]bool{}
+	var mark func(*PageNode)
+	mark = func(n *PageNode) {
+		if reached[n] {
+			return
+		}
+		reached[n] = true
+		for _, c := range n.Children {
+			mark(c)
+		}
+	}
+	for _, r := range roots {
+		mark(r)
+	}
+	for i := range pages {
+		if n := nodes[pages[i].ID]; !reached[n] {
+			// Detach n from its (cyclic) parent and make it a root.
+			if p := nodes[n.Page.ParentID]; p != nil {
+				p.Children = removeNode(p.Children, n)
+			}
+			roots = append(roots, n)
+			mark(n)
+		}
+	}
+
 	// Assign collision-free directory names within each sibling group.
 	assignDirNames(roots)
 	return roots
+}
+
+func removeNode(nodes []*PageNode, n *PageNode) []*PageNode {
+	out := nodes[:0]
+	for _, x := range nodes {
+		if x != n {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // assignDirNames sets DirName for each node, deduplicating within a sibling group.
 func assignDirNames(siblings []*PageNode) {
 	seen := make(map[string]int)
 	for _, n := range siblings {
-		base := storage.SanitizeName(n.Page.Title)
+		base := safeName(n.Page.Title, 80)
 		if base == "" {
-			base = fmt.Sprintf("page_%s", n.Page.ID)
+			base = fmt.Sprintf("page_%s", storage.SanitizeName(n.Page.ID))
 		}
 		if seen[base] == 0 {
 			n.dirName = base

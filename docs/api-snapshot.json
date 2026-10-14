@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-30T20:09:05Z",
+  "generated": "2026-10-14T06:14:47Z",
   "sources": {
     "v2": {
       "url": "openapi-v2.v3.json",
@@ -11,6 +11,66 @@
     }
   },
   "endpoints": {
+    "attachment_download_v1": [
+      "__SCHEMA_UNPARSEABLE__"
+    ],
+    "blogpost_attachments": [
+      "_links",
+      "blogPostId",
+      "comment",
+      "createdAt",
+      "customContentId",
+      "downloadLink",
+      "fileId",
+      "fileSize",
+      "id",
+      "mediaType",
+      "mediaTypeDescription",
+      "pageId",
+      "status",
+      "title",
+      "version",
+      "webuiLink"
+    ],
+    "blogpost_footer_comments": [
+      "_links",
+      "blogPostId",
+      "body",
+      "id",
+      "status",
+      "title",
+      "version"
+    ],
+    "blogpost_inline_comments": [
+      "_links",
+      "blogPostId",
+      "body",
+      "id",
+      "properties",
+      "resolutionStatus",
+      "status",
+      "title",
+      "version"
+    ],
+    "blogpost_labels": [
+      "id",
+      "name",
+      "prefix"
+    ],
+    "blogpost_properties": [
+      "id",
+      "key",
+      "value",
+      "version"
+    ],
+    "blogpost_versions": [
+      "authorId",
+      "blogpost",
+      "createdAt",
+      "message",
+      "minorEdit",
+      "number"
+    ],
     "database": [
       "_links",
       "authorId",
@@ -57,6 +117,26 @@
       "type",
       "version"
     ],
+    "footer_comment_replies": [
+      "_links",
+      "body",
+      "id",
+      "parentCommentId",
+      "status",
+      "title",
+      "version"
+    ],
+    "inline_comment_replies": [
+      "_links",
+      "body",
+      "id",
+      "parentCommentId",
+      "properties",
+      "resolutionStatus",
+      "status",
+      "title",
+      "version"
+    ],
     "page_attachments": [
       "_links",
       "blogPostId",
@@ -94,6 +174,25 @@
       "status",
       "title",
       "version"
+    ],
+    "page_labels": [
+      "id",
+      "name",
+      "prefix"
+    ],
+    "page_properties": [
+      "id",
+      "key",
+      "value",
+      "version"
+    ],
+    "page_versions": [
+      "authorId",
+      "createdAt",
+      "message",
+      "minorEdit",
+      "number",
+      "page"
     ],
     "search_v1": [
       "breadcrumbs",

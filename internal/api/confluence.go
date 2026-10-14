@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,32 +29,21 @@ func ValidateDomain(domain string) error {
 	return nil
 }
 
+// Backups keep every API object as the raw JSON Confluence returned, so a
+// restore or importer has all fields (ordering, authorship, inline-comment
+// anchors, …). The typed fields below are only what the backup logic itself
+// needs to read; Raw carries the complete object.
+
 // --- Types ---
 
 type Space struct {
-	ID     string `json:"id"`
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Status string `json:"status"`
-}
-
-type SpacePermission struct {
-	ID        string          `json:"id"`
-	Principal json.RawMessage `json:"principal"`
-	Operation json.RawMessage `json:"operation"`
-}
-
-type SpaceProperty struct {
-	Key     string          `json:"key"`
-	Value   json.RawMessage `json:"value"`
-	Version json.RawMessage `json:"version"`
-}
-
-type SpaceDetail struct {
-	Space
-	Permissions []SpacePermission `json:"permissions,omitempty"`
-	Properties  []SpaceProperty   `json:"properties,omitempty"`
+	ID         string          `json:"id"`
+	Key        string          `json:"key"`
+	Name       string          `json:"name"`
+	Type       string          `json:"type"`
+	Status     string          `json:"status"`
+	HomepageID string          `json:"homepageId,omitempty"`
+	Raw        json.RawMessage `json:"-"`
 }
 
 type PageVersion struct {
@@ -62,110 +52,50 @@ type PageVersion struct {
 	AuthorID  string `json:"authorId,omitempty"`
 }
 
-type Label struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Prefix string `json:"prefix"`
+type storageBody struct {
+	Storage struct {
+		Value string `json:"value"`
+	} `json:"storage"`
 }
 
+// Page is a page or blog post (both share these fields; blog posts have no parent).
 type Page struct {
-	ID         string      `json:"id"`
-	Title      string      `json:"title"`
-	SpaceID    string      `json:"spaceId"`
-	ParentID   string      `json:"parentId,omitempty"`
-	ParentType string      `json:"parentType,omitempty"`
-	Status     string      `json:"status"`
-	Version    PageVersion `json:"version"`
-	Body       struct {
-		Storage struct {
-			Value string `json:"value"`
-		} `json:"storage"`
-	} `json:"body"`
-	Labels []Label `json:"labels,omitempty"`
+	ID         string          `json:"id"`
+	Title      string          `json:"title"`
+	SpaceID    string          `json:"spaceId"`
+	ParentID   string          `json:"parentId,omitempty"`
+	ParentType string          `json:"parentType,omitempty"`
+	Status     string          `json:"status"`
+	AuthorID   string          `json:"authorId,omitempty"`
+	OwnerID    string          `json:"ownerId,omitempty"`
+	CreatedAt  string          `json:"createdAt,omitempty"`
+	Version    PageVersion     `json:"version"`
+	Body       storageBody     `json:"body"`
+	Raw        json.RawMessage `json:"-"`
 }
 
-type BlogPost struct {
-	ID      string      `json:"id"`
-	Title   string      `json:"title"`
-	SpaceID string      `json:"spaceId"`
-	Status  string      `json:"status"`
-	Version PageVersion `json:"version"`
-	Body    struct {
-		Storage struct {
-			Value string `json:"value"`
-		} `json:"storage"`
-	} `json:"body"`
-}
+// BlogPost has the same shape as a page.
+type BlogPost = Page
 
-type Comment struct {
-	ID   string `json:"id"`
-	Body struct {
-		Storage struct {
-			Value string `json:"value"`
-		} `json:"storage"`
-	} `json:"body"`
-	Version json.RawMessage `json:"version"`
-}
-
-type Comments struct {
-	Footer []Comment `json:"footer"`
-	Inline []Comment `json:"inline"`
-}
-
+// Attachment is the part of an attachment record the backup needs to
+// download the file; the complete record is kept in Raw.
 type Attachment struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	FileSize  int64  `json:"fileSize"`
-	MediaType string `json:"mediaType"`
-	// Links contains the relative download URL; build the full URL via client.BaseURL().
-	Links struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	FileSize     int64  `json:"fileSize"`
+	MediaType    string `json:"mediaType"`
+	DownloadLink string `json:"downloadLink"`
+	Links        struct {
 		Download string `json:"download"`
 	} `json:"_links"`
+	Raw json.RawMessage `json:"-"`
 }
 
+// Template is the part of a template record used to name its backup file.
 type Template struct {
-	TemplateID   string `json:"templateId"`
-	Name         string `json:"name"`
-	TemplateType string `json:"templateType"`
-	Body         struct {
-		Storage struct {
-			Value string `json:"value"`
-		} `json:"storage"`
-	} `json:"body"`
-}
-
-type User struct {
-	AccountID   string `json:"accountId"`
-	DisplayName string `json:"displayName"`
-	Email       string `json:"email"`
-	AccountType string `json:"accountType"`
-}
-
-// SpaceLabels groups space-level labels and labels used on content in the space.
-type SpaceLabels struct {
-	Space   []Label `json:"space"`
-	Content []Label `json:"content"`
-}
-
-// Task is an inline task (action item) from pages or blog posts.
-type Task struct {
-	ID          string `json:"id"`
-	LocalID     string `json:"localId,omitempty"`
-	SpaceID     string `json:"spaceId,omitempty"`
-	PageID      string `json:"pageId,omitempty"`
-	BlogPostID  string `json:"blogPostId,omitempty"`
-	Status      string `json:"status"`
-	CreatedBy   string `json:"createdBy,omitempty"`
-	AssignedTo  string `json:"assignedTo,omitempty"`
-	CompletedBy string `json:"completedBy,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
-	DueAt       string `json:"dueAt,omitempty"`
-	CompletedAt string `json:"completedAt,omitempty"`
-	Body        struct {
-		Storage struct {
-			Value string `json:"value"`
-		} `json:"storage"`
-	} `json:"body"`
+	TemplateID string          `json:"templateId"`
+	Name       string          `json:"name"`
+	Raw        json.RawMessage `json:"-"`
 }
 
 // ContentRef identifies a content item found via CQL search.
@@ -175,11 +105,21 @@ type ContentRef struct {
 	Title string `json:"title"`
 }
 
-// --- Fetch functions ---
+// CommentTree holds the footer and inline comments of a page or blog post.
+// Each comment is the raw API object plus a "replies" array holding its
+// reply thread (recursively).
+type CommentTree struct {
+	Footer []json.RawMessage `json:"footer"`
+	Inline []json.RawMessage `json:"inline"`
+}
 
-// FetchSpaces returns all visible spaces.
+// --- Spaces ---
+
+// FetchSpaces returns all visible spaces, each with its raw API object
+// (including homepageId and the plain-text description; "view" is not supported
+// through the API gateway).
 func FetchSpaces(ctx context.Context, client *Client) ([]Space, error) {
-	items, err := FetchAll(ctx, client, "/wiki/api/v2/spaces?limit=250")
+	items, err := FetchAll(ctx, client, "/wiki/api/v2/spaces?limit=250&description-format=plain")
 	if err != nil {
 		return nil, fmt.Errorf("fetch spaces: %w", err)
 	}
@@ -189,210 +129,249 @@ func FetchSpaces(ctx context.Context, client *Client) ([]Space, error) {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return nil, fmt.Errorf("parse space: %w", err)
 		}
+		s.Raw = raw
 		spaces = append(spaces, s)
 	}
 	return spaces, nil
 }
 
-// FetchSpaceDetail fetches permissions and properties for one space (v2 API).
-func FetchSpaceDetail(ctx context.Context, client *Client, space Space) (SpaceDetail, error) {
-	detail := SpaceDetail{Space: space}
-
-	// Permissions (v2)
-	permItems, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/spaces/%s/permissions?limit=250", space.ID))
+// FetchSpacePermissions returns the raw permission entries of a space.
+func FetchSpacePermissions(ctx context.Context, client *Client, spaceID string) ([]json.RawMessage, error) {
+	items, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/permissions?limit=250", url.PathEscape(spaceID)))
 	if err != nil {
-		return detail, fmt.Errorf("fetch permissions for space %s: %w", space.Key, err)
+		return nil, fmt.Errorf("fetch permissions for space %s: %w", spaceID, err)
 	}
-	for _, raw := range permItems {
-		var p SpacePermission
-		if err := json.Unmarshal(raw, &p); err == nil {
-			detail.Permissions = append(detail.Permissions, p)
-		}
-	}
-
-	// Properties (v2)
-	propItems, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/spaces/%s/properties?limit=250", space.ID))
-	if err == nil {
-		for _, raw := range propItems {
-			var p SpaceProperty
-			if json.Unmarshal(raw, &p) == nil {
-				detail.Properties = append(detail.Properties, p)
-			}
-		}
-	}
-	// Properties fetch failure is non-fatal — continue without them.
-
-	return detail, nil
+	return items, nil
 }
 
-// FetchPages returns all pages in a space with HTML body.
-func FetchPages(ctx context.Context, client *Client, spaceID string) ([]Page, error) {
-	path := fmt.Sprintf(
-		"/wiki/api/v2/spaces/%s/pages?body-format=storage&limit=250&status=current", spaceID)
+// FetchSpaceProperties returns the raw content properties of a space.
+func FetchSpaceProperties(ctx context.Context, client *Client, spaceID string) ([]json.RawMessage, error) {
+	items, err := FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/properties?limit=250", url.PathEscape(spaceID)))
+	if err != nil {
+		return nil, fmt.Errorf("fetch properties for space %s: %w", spaceID, err)
+	}
+	return items, nil
+}
+
+// --- Pages and blog posts ---
+
+func fetchContent(ctx context.Context, client *Client, path, what string) ([]Page, error) {
 	items, err := FetchAll(ctx, client, path)
 	if err != nil {
-		return nil, fmt.Errorf("fetch pages for space %s: %w", spaceID, err)
+		return nil, fmt.Errorf("fetch %s: %w", what, err)
 	}
-	pages := make([]Page, 0, len(items))
+	out := make([]Page, 0, len(items))
 	for _, raw := range items {
 		var p Page
 		if err := json.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("parse page: %w", err)
+			return nil, fmt.Errorf("parse %s: %w", what, err)
 		}
-		pages = append(pages, p)
+		p.Raw = raw
+		out = append(out, p)
 	}
-	return pages, nil
+	return out, nil
 }
 
-// FetchBlogPosts returns all blog posts in a space with HTML body.
+// FetchPages returns every current AND archived page of a space with its
+// storage-format body. (Archived pages are real content; the API includes
+// them by default, the previous `status=current` filter dropped them.)
+func FetchPages(ctx context.Context, client *Client, spaceID string) ([]Page, error) {
+	return fetchContent(ctx, client, fmt.Sprintf(
+		"/wiki/api/v2/spaces/%s/pages?body-format=storage&limit=250&status=current&status=archived",
+		url.PathEscape(spaceID)), "pages for space "+spaceID)
+}
+
+// FetchBlogPosts returns all current blog posts of a space with storage-format body.
 func FetchBlogPosts(ctx context.Context, client *Client, spaceID string) ([]BlogPost, error) {
-	path := fmt.Sprintf(
-		"/wiki/api/v2/spaces/%s/blogposts?body-format=storage&limit=250&status=current", spaceID)
-	items, err := FetchAll(ctx, client, path)
-	if err != nil {
-		return nil, fmt.Errorf("fetch blogposts for space %s: %w", spaceID, err)
-	}
-	posts := make([]BlogPost, 0, len(items))
-	for _, raw := range items {
-		var p BlogPost
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("parse blogpost: %w", err)
-		}
-		posts = append(posts, p)
-	}
-	return posts, nil
+	return fetchContent(ctx, client, fmt.Sprintf(
+		"/wiki/api/v2/spaces/%s/blogposts?body-format=storage&limit=250&status=current",
+		url.PathEscape(spaceID)), "blog posts for space "+spaceID)
 }
 
-// FetchComments fetches footer and inline comments for a page.
-func FetchComments(ctx context.Context, client *Client, pageID string) (Comments, error) {
-	var c Comments
+// Container is the v2 path segment of a content type that owns comments,
+// attachments, labels, properties and versions.
+type Container string
 
-	footer, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/pages/%s/footer-comments?body-format=storage&limit=250", pageID))
-	if err != nil {
-		return c, fmt.Errorf("fetch footer comments for page %s: %w", pageID, err)
-	}
-	for _, raw := range footer {
-		var comment Comment
-		if json.Unmarshal(raw, &comment) == nil {
-			c.Footer = append(c.Footer, comment)
-		}
-	}
+const (
+	ContainerPage     Container = "pages"
+	ContainerBlogPost Container = "blogposts"
+)
 
-	inline, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/pages/%s/inline-comments?body-format=storage&limit=250", pageID))
-	if err != nil {
-		return c, fmt.Errorf("fetch inline comments for page %s: %w", pageID, err)
-	}
-	for _, raw := range inline {
-		var comment Comment
-		if json.Unmarshal(raw, &comment) == nil {
-			c.Inline = append(c.Inline, comment)
-		}
-	}
-
-	return c, nil
-}
-
-// FetchAttachmentMeta returns attachment metadata for a page (no file download).
-func FetchAttachmentMeta(ctx context.Context, client *Client, pageID string) ([]Attachment, error) {
+// FetchContentList fetches a raw sub-collection of a page or blog post:
+// "labels", "properties", "versions" or "attachments".
+func FetchContentList(ctx context.Context, client *Client, c Container, id, sub string) ([]json.RawMessage, error) {
 	items, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/pages/%s/attachments?limit=250", pageID))
+		fmt.Sprintf("/wiki/api/v2/%s/%s/%s?limit=250", c, url.PathEscape(id), sub))
 	if err != nil {
-		return nil, fmt.Errorf("fetch attachments for page %s: %w", pageID, err)
+		return nil, fmt.Errorf("fetch %s of %s %s: %w", sub, c, id, err)
+	}
+	return items, nil
+}
+
+// FetchAttachments returns the attachments of a page or blog post.
+func FetchAttachments(ctx context.Context, client *Client, c Container, id string) ([]Attachment, error) {
+	items, err := FetchContentList(ctx, client, c, id, "attachments")
+	if err != nil {
+		return nil, err
 	}
 	atts := make([]Attachment, 0, len(items))
 	for _, raw := range items {
 		var a Attachment
-		if err := json.Unmarshal(raw, &a); err == nil {
-			atts = append(atts, a)
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, fmt.Errorf("parse attachment of %s %s: %w", c, id, err)
 		}
+		a.Raw = raw
+		atts = append(atts, a)
 	}
 	return atts, nil
 }
 
-// FetchTemplates returns space-level content and blueprint templates (v1 API).
-// The combined /wiki/rest/api/template endpoint is no longer documented;
-// /template/page and /template/blueprint replace it.
+// AttachmentDownloadPath is the documented v1 download endpoint for an
+// attachment. It works with Basic auth on the site and with Bearer auth
+// through the API gateway, unlike the relative `_links.download` link.
+func AttachmentDownloadPath(containerID, attachmentID string) string {
+	return fmt.Sprintf("/wiki/rest/api/content/%s/child/attachment/%s/download",
+		url.PathEscape(containerID), url.PathEscape(attachmentID))
+}
+
+// maxCommentDepth bounds reply-thread recursion.
+const maxCommentDepth = 50
+
+// FetchCommentTree returns all footer and inline comments of a page or blog
+// post together with their reply threads. The v2 list endpoints return root
+// comments only; replies live under /{footer|inline}-comments/{id}/children.
+// The second return value is the total number of comments, replies included.
+func FetchCommentTree(ctx context.Context, client *Client, c Container, id string) (CommentTree, int, error) {
+	var tree CommentTree
+	total := 0
+	for _, kind := range []string{"footer", "inline"} {
+		roots, err := FetchAll(ctx, client, fmt.Sprintf(
+			"/wiki/api/v2/%s/%s/%s-comments?body-format=storage&limit=250", c, url.PathEscape(id), kind))
+		if err != nil {
+			return tree, total, fmt.Errorf("fetch %s comments of %s %s: %w", kind, c, id, err)
+		}
+		withReplies, n, err := attachReplies(ctx, client, kind, roots, 0)
+		if err != nil {
+			return tree, total, err
+		}
+		total += n
+		if kind == "footer" {
+			tree.Footer = withReplies
+		} else {
+			tree.Inline = withReplies
+		}
+	}
+	return tree, total, nil
+}
+
+// attachReplies adds a "replies" array to each comment, fetched recursively.
+func attachReplies(ctx context.Context, client *Client, kind string, comments []json.RawMessage, depth int) ([]json.RawMessage, int, error) {
+	if depth > maxCommentDepth {
+		return nil, 0, fmt.Errorf("%s comment thread deeper than %d levels", kind, maxCommentDepth)
+	}
+	out := make([]json.RawMessage, 0, len(comments))
+	total := 0
+	for _, raw := range comments {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, 0, fmt.Errorf("parse %s comment: %w", kind, err)
+		}
+		var id string
+		if err := json.Unmarshal(obj["id"], &id); err != nil || id == "" {
+			return nil, 0, fmt.Errorf("%s comment without id", kind)
+		}
+		children, err := FetchAll(ctx, client, fmt.Sprintf(
+			"/wiki/api/v2/%s-comments/%s/children?body-format=storage&limit=250", kind, url.PathEscape(id)))
+		if err != nil {
+			return nil, 0, fmt.Errorf("fetch replies to %s comment %s: %w", kind, id, err)
+		}
+		replies, n, err := attachReplies(ctx, client, kind, children, depth+1)
+		if err != nil {
+			return nil, 0, err
+		}
+		if obj["replies"], err = marshalNoEscape(replies); err != nil {
+			return nil, 0, err
+		}
+		merged, err := marshalNoEscape(obj)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, merged)
+		total += 1 + n
+	}
+	return out, total, nil
+}
+
+// --- Templates, labels, tasks, custom content ---
+
+// FetchTemplates returns all page and blueprint templates of a space (v1 API),
+// following pagination. The combined /wiki/rest/api/template endpoint is no
+// longer documented; /template/page and /template/blueprint replace it.
 func FetchTemplates(ctx context.Context, client *Client, spaceKey string) ([]Template, error) {
 	var all []Template
 	for _, kind := range []string{"page", "blueprint"} {
-		body, err := client.Get(ctx,
-			fmt.Sprintf("/wiki/rest/api/template/%s?spaceKey=%s&limit=200", kind, spaceKey))
+		items, _, err := FetchAllV1(ctx, client, fmt.Sprintf(
+			"/wiki/rest/api/template/%s?spaceKey=%s&limit=200", kind, url.QueryEscape(spaceKey)))
 		if err != nil {
 			return all, fmt.Errorf("fetch %s templates for space %s: %w", kind, spaceKey, err)
 		}
-		var resp struct {
-			Results []Template `json:"results"`
+		for _, raw := range items {
+			var t Template
+			if err := json.Unmarshal(raw, &t); err != nil {
+				return all, fmt.Errorf("parse %s template for space %s: %w", kind, spaceKey, err)
+			}
+			t.Raw = raw
+			all = append(all, t)
 		}
-		if err := json.Unmarshal(body, &resp); err != nil {
-			return all, fmt.Errorf("parse %s templates for space %s: %w", kind, spaceKey, err)
-		}
-		all = append(all, resp.Results...)
 	}
 	return all, nil
+}
+
+// SpaceLabels groups space-level labels and labels used on content in the space.
+type SpaceLabels struct {
+	Space   []json.RawMessage `json:"space"`
+	Content []json.RawMessage `json:"content"`
 }
 
 // FetchSpaceLabels returns space-level labels and content labels for a space.
 func FetchSpaceLabels(ctx context.Context, client *Client, spaceID string) (SpaceLabels, error) {
 	var sl SpaceLabels
-
-	spaceItems, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/spaces/%s/labels?limit=250", spaceID))
-	if err != nil {
+	var err error
+	if sl.Space, err = FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/labels?limit=250", url.PathEscape(spaceID))); err != nil {
 		return sl, fmt.Errorf("fetch space labels for space %s: %w", spaceID, err)
 	}
-	for _, raw := range spaceItems {
-		var l Label
-		if json.Unmarshal(raw, &l) == nil {
-			sl.Space = append(sl.Space, l)
-		}
-	}
-
-	contentItems, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/spaces/%s/content/labels?limit=250", spaceID))
-	if err != nil {
+	if sl.Content, err = FetchAll(ctx, client,
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/content/labels?limit=250", url.PathEscape(spaceID))); err != nil {
 		return sl, fmt.Errorf("fetch content labels for space %s: %w", spaceID, err)
 	}
-	for _, raw := range contentItems {
-		var l Label
-		if json.Unmarshal(raw, &l) == nil {
-			sl.Content = append(sl.Content, l)
-		}
-	}
-
 	return sl, nil
 }
 
-// FetchTasks returns all inline tasks in a space.
-func FetchTasks(ctx context.Context, client *Client, spaceID string) ([]Task, error) {
+// FetchTasks returns all inline tasks in a space (raw).
+func FetchTasks(ctx context.Context, client *Client, spaceID string) ([]json.RawMessage, error) {
 	items, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/tasks?space-id=%s&body-format=storage&limit=250", spaceID))
+		fmt.Sprintf("/wiki/api/v2/tasks?space-id=%s&body-format=storage&limit=250", url.QueryEscape(spaceID)))
 	if err != nil {
 		return nil, fmt.Errorf("fetch tasks for space %s: %w", spaceID, err)
 	}
-	tasks := make([]Task, 0, len(items))
-	for _, raw := range items {
-		var t Task
-		if err := json.Unmarshal(raw, &t); err == nil {
-			tasks = append(tasks, t)
-		}
-	}
-	return tasks, nil
+	return items, nil
 }
 
 // FetchCustomContent returns custom content (app-defined types) in a space.
 // The payload shape is app-specific, so items are kept as raw JSON.
 func FetchCustomContent(ctx context.Context, client *Client, spaceID string) ([]json.RawMessage, error) {
 	items, err := FetchAll(ctx, client,
-		fmt.Sprintf("/wiki/api/v2/spaces/%s/custom-content?limit=250", spaceID))
+		fmt.Sprintf("/wiki/api/v2/spaces/%s/custom-content?limit=250", url.PathEscape(spaceID)))
 	if err != nil {
 		return nil, fmt.Errorf("fetch custom content for space %s: %w", spaceID, err)
 	}
 	return items, nil
 }
+
+// --- Whiteboards, databases, folders, embeds ---
 
 // smartContentTypes are v2 content types without list endpoints — they are
 // discovered per space via CQL search, then fetched individually by ID.
@@ -409,43 +388,38 @@ func SmartContentTypes() []string {
 	return []string{"whiteboard", "database", "folder", "embed"}
 }
 
-// searchMaxPages bounds v1 search pagination (250 items/page → 10k items).
-const searchMaxPages = 40
-
 // FetchContentIDsByType discovers content of a given type (whiteboard,
 // database, folder, embed) in a space via the v1 CQL search API, which is
 // the documented way to enumerate these types — v2 has no list endpoints.
-func FetchContentIDsByType(ctx context.Context, client *Client, spaceKey, contentType string) ([]ContentRef, error) {
+//
+// It follows the search's `_links.next` cursor: the server may cap `limit`
+// below the requested 250 ("restricted by fixed system limits"), so a short
+// page is not the end of the results. missing is the number of results the
+// API announced (totalSize) but did not deliver; 0 when complete.
+func FetchContentIDsByType(ctx context.Context, client *Client, spaceKey, contentType string) (refs []ContentRef, missing int, err error) {
 	if _, ok := smartContentTypes[contentType]; !ok {
-		return nil, fmt.Errorf("unsupported content type %q", contentType)
+		return nil, 0, fmt.Errorf("unsupported content type %q", contentType)
 	}
-	var refs []ContentRef
 	cql := url.QueryEscape(fmt.Sprintf("space = %q and type = %s", spaceKey, contentType))
-	for page := 0; page < searchMaxPages; page++ {
-		body, err := client.Get(ctx, fmt.Sprintf(
-			"/wiki/rest/api/search?cql=%s&limit=250&start=%d", cql, page*250))
-		if err != nil {
-			return refs, fmt.Errorf("search %s in space %s: %w", contentType, spaceKey, err)
+	items, total, err := FetchAllV1(ctx, client, "/wiki/rest/api/search?cql="+cql+"&limit=250")
+	if err != nil {
+		return nil, 0, fmt.Errorf("search %s in space %s: %w", contentType, spaceKey, err)
+	}
+	for _, raw := range items {
+		var r struct {
+			Content ContentRef `json:"content"`
 		}
-		var resp struct {
-			Results []struct {
-				Content ContentRef `json:"content"`
-			} `json:"results"`
-			Size int `json:"size"`
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, 0, fmt.Errorf("parse search result for %s in space %s: %w", contentType, spaceKey, err)
 		}
-		if err := json.Unmarshal(body, &resp); err != nil {
-			return refs, fmt.Errorf("parse search results for %s in space %s: %w", contentType, spaceKey, err)
-		}
-		for _, r := range resp.Results {
-			if r.Content.ID != "" {
-				refs = append(refs, r.Content)
-			}
-		}
-		if len(resp.Results) < 250 {
-			break
+		if r.Content.ID != "" {
+			refs = append(refs, r.Content)
 		}
 	}
-	return refs, nil
+	if total > len(items) {
+		missing = total - len(items)
+	}
+	return refs, missing, nil
 }
 
 // FetchContentItem fetches a single whiteboard, database, folder, or embed
@@ -463,16 +437,29 @@ func FetchContentItem(ctx context.Context, client *Client, contentType, id strin
 	return json.RawMessage(body), nil
 }
 
-// FetchUserProfile fetches a single user profile by account ID (v1 API).
-func FetchUserProfile(ctx context.Context, client *Client, accountID string) (User, error) {
+// --- Users ---
+
+// FetchUserProfile fetches a single user profile by account ID (v1 API, raw).
+func FetchUserProfile(ctx context.Context, client *Client, accountID string) (json.RawMessage, error) {
 	body, err := client.Get(ctx,
-		fmt.Sprintf("/wiki/rest/api/user?accountId=%s&expand=email", accountID))
+		fmt.Sprintf("/wiki/rest/api/user?accountId=%s&expand=email", url.QueryEscape(accountID)))
 	if err != nil {
-		return User{}, fmt.Errorf("fetch user %s: %w", accountID, err)
+		return nil, fmt.Errorf("fetch user %s: %w", accountID, err)
 	}
-	var u User
-	if err := json.Unmarshal(body, &u); err != nil {
-		return User{}, fmt.Errorf("parse user %s: %w", accountID, err)
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("parse user %s: invalid JSON", accountID)
 	}
-	return u, nil
+	return json.RawMessage(body), nil
+}
+
+// marshalNoEscape is json.Marshal without HTML escaping: comment bodies are
+// HTML, and "<p>" stays readable instead of becoming "<p>".
+func marshalNoEscape(v any) (json.RawMessage, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
