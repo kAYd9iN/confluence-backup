@@ -1,6 +1,6 @@
 module github.com/kAYd9iN/confluence-backup
 
-go 1.26.0
+go 1.26.9
 
 require (
 	github.com/danieljoos/wincred v1.2.3

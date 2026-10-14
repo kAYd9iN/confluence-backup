@@ -7,7 +7,7 @@ into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
 
 ## Commands
 
-    GOTOOLCHAIN=go1.25.8 go test ./...
+    go test ./...
     go build -o confluence-backup ./cmd/backup/
 
     # Service account (recommended)
@@ -83,7 +83,9 @@ into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
 
 - GitHub: kAYd9iN/confluence-backup (public)
 - Versioning: 0ver — v0.1.0, v0.2.0, ... (https://0ver.org/)
-- go.mod: go 1.25.8 / CI go-version: '1.26' — do not change
+- go.mod: `go 1.26.9` (minimum patched toolchain). CI uses `go-version: '1.26'` +
+  `check-latest: true`, so every run gets the newest 1.26 patch — without it setup-go
+  uses the runner's cached Go, which made govulncheck fail (GO-2026-6617, GO-2026-6613)
 
 ## Self-Update Loop (API drift)
 
@@ -140,5 +142,5 @@ verified nothing.
 
 1. Add fetch function to internal/api/confluence.go (use space-scoped endpoint)
 2. Call it in internal/backup/backup.go (processSpace or Run)
-3. Run GOTOOLCHAIN=go1.25.8 go test ./... to verify
+3. Run go test ./... to verify
 4. Commit
