@@ -325,9 +325,55 @@ func (c *converter) acElement(n *node) {
 		} else {
 			c.children(n)
 		}
+	case "adf-node":
+		c.adfNode(n)
+	case "adf-content":
+		c.children(n)
 	default:
 		// Unknown ac: element: keep whatever it contains.
 		c.res.Placeholders["ac:"+n.name.Local]++
+		c.children(n)
+	}
+}
+
+// adfAttr returns an <ac:adf-attribute key="…"> value of an ADF node.
+func adfAttr(n *node, key string) string {
+	for _, ch := range n.children {
+		if ch.is("ac", "adf-attribute") && ch.get("", "key") == key {
+			return strings.TrimSpace(ch.textContent())
+		}
+	}
+	return ""
+}
+
+// adfNode renders nodes of Confluence's newer editor that are stored as
+// <ac:adf-node type="…"> without an HTML fallback.
+func (c *converter) adfNode(n *node) {
+	switch t := n.get("", "type"); t {
+	case "decision-list":
+		c.open("ul", "class", "decision-list")
+		c.children(n)
+		c.close("ul")
+	case "decision-item":
+		mark := "◇ "
+		if adfAttr(n, "state") == "DECIDED" {
+			mark = "✔ "
+		}
+		c.open("li", "class", "decision")
+		c.text(mark + "Entscheidung: ")
+		c.children(n)
+		c.close("li")
+	case "panel":
+		kind := adfAttr(n, "panel-type")
+		if kind == "" {
+			kind = "info"
+		}
+		c.open("div", "class", "panel panel-"+kind)
+		c.children(n)
+		c.close("div")
+	default:
+		// Unknown node type: keep what it contains, report it by type.
+		c.res.Placeholders["adf:"+t]++
 		c.children(n)
 	}
 }

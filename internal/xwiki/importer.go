@@ -434,7 +434,7 @@ func (im *importer) importPage(ctx context.Context, p *model.Page, title string)
 		return nil
 	}
 	switch p.Kind {
-	case model.KindFolder:
+	case model.KindFolder, model.KindSmart:
 		im.rep.Folders++
 	case model.KindBlogPost:
 		im.rep.Posts++
@@ -537,6 +537,11 @@ func (im *importer) content(p *model.Page) (string, error) {
 	}
 	if p.Kind == model.KindFolder {
 		b.WriteString("<p>Ordner aus Confluence.</p>")
+		return b.String(), nil
+	}
+	if p.Kind == model.KindSmart {
+		b.WriteString(`<div class="box warningmessage"><p>Confluence-` + esc(p.SmartType) +
+			`: Der Inhalt ist über die Confluence-API nicht exportierbar. Die Metadaten liegen im Backup.</p></div>`)
 		return b.String(), nil
 	}
 	body, err := p.Body()

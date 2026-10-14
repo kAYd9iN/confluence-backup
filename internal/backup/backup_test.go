@@ -86,12 +86,19 @@ func fakeConfluence(t *testing.T, failPath string) *httptest.Server {
 			sendJSON(w, map[string]any{"results": []any{}, "limit": 200})
 		case "/wiki/rest/api/search":
 			var results []map[string]any
-			if strings.Contains(r.URL.Query().Get("cql"), "type = folder") {
+			switch cql := r.URL.Query().Get("cql"); {
+			case strings.Contains(cql, "type = folder"):
 				results = []map[string]any{{"content": map[string]any{"id": "f1", "type": "folder", "title": "Projects"}}}
+			case strings.Contains(cql, "type = whiteboard"):
+				results = []map[string]any{{"content": map[string]any{"id": "w1", "type": "whiteboard", "title": "Skizze"}}}
 			}
 			sendJSON(w, map[string]any{"results": results, "limit": 250, "totalSize": len(results)})
 		case "/wiki/api/v2/folders/f1":
-			sendJSON(w, map[string]any{"id": "f1", "title": "Projects", "parentId": "10"})
+			// createdAt as epoch milliseconds, exactly as a live site returns it for folders.
+			sendJSON(w, map[string]any{"id": "f1", "title": "Projects", "parentId": "10", "createdAt": 1791985501370,
+				"version": map[string]any{"number": 1, "createdAt": "2026-10-14T13:45:01.370Z"}})
+		case "/wiki/api/v2/whiteboards/w1":
+			sendJSON(w, map[string]any{"id": "w1", "title": "Skizze", "parentId": "10", "createdAt": 1791985270149})
 		case "/wiki/rest/api/user":
 			sendJSON(w, map[string]any{"accountId": r.URL.Query().Get("accountId"), "displayName": "Someone"})
 		default:
@@ -306,6 +313,15 @@ func TestPipeline_BackupThenExport(t *testing.T) {
 	}
 	readFile(t, site, "KB/b/20.html")
 	idx := readFile(t, site, "KB/index.html")
+	if w := sp.ByID("w1"); w == nil || w.Kind != model.KindSmart || w.SmartType != "whiteboard" || w.Parent == nil {
+		t.Errorf("whiteboard w1 not in the page tree: %+v", w)
+	}
+	if f := sp.ByID("f1"); f == nil || !strings.HasPrefix(f.CreatedAt, "2026-10-14T") {
+		t.Errorf("epoch-millisecond createdAt not converted: %+v", f)
+	}
+	if !strings.Contains(idx, "Skizze") || !strings.Contains(idx, "nicht exportierbar") {
+		t.Errorf("space index lacks the whiteboard entry:\n%s", idx)
+	}
 	if !strings.Contains(idx, "Projects") || !strings.Contains(idx, "News") {
 		t.Errorf("space index lacks folder or blog post:\n%s", idx)
 	}
@@ -393,7 +409,7 @@ func TestPipeline_BackupThenXWikiImport(t *testing.T) {
 	if len(rep.Failed) > 0 || len(rep.NotFoundAfterImport) > 0 {
 		t.Fatalf("failed=%v notFound=%v", rep.Failed, rep.NotFoundAfterImport)
 	}
-	if rep.Spaces != 1 || rep.Pages != 3 || rep.Folders != 1 || rep.Posts != 1 || rep.Attachments != 2 {
+	if rep.Spaces != 1 || rep.Pages != 3 || rep.Folders != 2 || rep.Posts != 1 || rep.Attachments != 2 {
 		t.Errorf("report = %+v", rep)
 	}
 
@@ -419,6 +435,9 @@ func TestPipeline_BackupThenXWikiImport(t *testing.T) {
 	}
 	xw.page(t, "spaces/KB/spaces/Seite-12/pages/WebHome")
 	xw.page(t, "spaces/KB/spaces/Projects/pages/WebHome")
+	if wb := xw.page(t, "spaces/KB/spaces/Skizze/pages/WebHome"); !strings.Contains(wb, "nicht exportierbar") {
+		t.Errorf("whiteboard page lacks the notice:\n%s", wb)
+	}
 	// Blog posts under KB/Blog.
 	xw.page(t, "spaces/KB/spaces/Blog/pages/WebHome")
 	xw.page(t, "spaces/KB/spaces/Blog/spaces/2026-05-04 News/pages/WebHome")

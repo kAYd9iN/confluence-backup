@@ -183,6 +183,29 @@ func TestConvert_TasksEmoticonsLayoutsMarkers(t *testing.T) {
 	}
 }
 
+// Newer-editor content stored as ADF nodes without fallback (seen on a live
+// site: decision lists from the meeting-notes template).
+func TestConvert_ADFDecisionListAndPanel(t *testing.T) {
+	res := conv(t, `<ac:adf-extension><ac:adf-node type="decision-list">`+
+		`<ac:adf-attribute key="local-id">x</ac:adf-attribute>`+
+		`<ac:adf-node type="decision-item"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute>`+
+		`<ac:adf-content>Wir nehmen XWiki</ac:adf-content></ac:adf-node>`+
+		`</ac:adf-node></ac:adf-extension>`+
+		`<ac:adf-extension><ac:adf-node type="panel"><ac:adf-attribute key="panel-type">note</ac:adf-attribute>`+
+		`<ac:adf-content><p>Panel-Text</p></ac:adf-content></ac:adf-node></ac:adf-extension>`+
+		`<ac:adf-extension><ac:adf-node type="something-new"><ac:adf-content><p>Neu</p></ac:adf-content></ac:adf-node></ac:adf-extension>`)
+	contains(t, res.HTML,
+		`<ul class="decision-list"><li class="decision">✔ Entscheidung: Wir nehmen XWiki</li></ul>`,
+		`<div class="panel panel-note"><p>Panel-Text</p></div>`,
+		`<p>Neu</p>`)
+	if strings.Contains(res.HTML, "local-id") || strings.Contains(res.HTML, ">x<") {
+		t.Errorf("ADF attributes leaked into the output:\n%s", res.HTML)
+	}
+	if res.Placeholders["adf:something-new"] != 1 || res.Placeholders["ac:adf-node"] != 0 {
+		t.Errorf("placeholders = %v", res.Placeholders)
+	}
+}
+
 func TestConvert_DrawioUsesPreviewImage(t *testing.T) {
 	res := conv(t, `<ac:structured-macro ac:name="drawio"><ac:parameter ac:name="diagramName">flow</ac:parameter></ac:structured-macro>`)
 	contains(t, res.HTML, `<img src="att/flow.png" alt="flow" title="Diagramm: flow"/>`)
