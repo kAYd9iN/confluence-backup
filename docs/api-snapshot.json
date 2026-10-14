@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-30T20:09:05Z",
+  "generated": "2026-10-14T06:18:55Z",
   "sources": {
     "v2": {
       "url": "openapi-v2.v3.json",
@@ -183,6 +183,7 @@
       "createdAt",
       "currentActiveAlias",
       "description",
+      "homepageId",
       "icon",
       "id",
       "key",
