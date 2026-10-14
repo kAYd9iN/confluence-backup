@@ -273,6 +273,6 @@ jobs:
           if git diff --name-only HEAD~1 HEAD | grep -q '^internal/'; then
             echo "::notice::Code changes included — skipping auto-merge, human review required."
           else
-            gh pr merge "$BRANCH" --auto --squash || \
+            echo "TEST RUN: auto-merge disabled" || \
               echo "::notice::Auto-merge not enabled — PR requires manual merge."
           fi
