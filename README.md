@@ -112,6 +112,7 @@ confluence-backup verify --dir ./backups/2026-03-08T12-00-00
 confluence-backup [Optionen]
 confluence-backup verify --dir <path>
 confluence-backup export --dir <path> --out <site-dir>
+confluence-backup import-xwiki --dir <path> --url <xwiki-url> [--parent Seite] [--dry-run]
 
 Optionen:
   --domain DOMAIN        Atlassian-Domain (z.B. myorg.atlassian.net) [erforderlich]
@@ -144,6 +145,41 @@ confluence-backup export --dir ./backups/2026-03-08T12-00-00 --out ./notfall-sit
   die nicht im Backup sind
 
 `export` liest nur das Backup — kein Netzwerk, keine Zugangsdaten.
+
+## Notfall: Backup in XWiki einspielen
+
+Für den dauerhaften Weiterbetrieb ohne Confluence spielt `import-xwiki` ein Backup
+über die REST-API in eine [XWiki](https://www.xwiki.org)-Instanz ein:
+
+```bash
+# XWiki-Zugangsdaten (Admin) — nie als Argument, damit sie nicht in der Shell-History landen
+export XWIKI_USER=Admin XWIKI_PASSWORD=…        # Windows: cmdkey /generic:xwiki-import /user:Admin /pass:…
+
+confluence-backup import-xwiki --dir ./backups/2026-03-08T12-00-00 --url https://wiki.example.com --dry-run
+confluence-backup import-xwiki --dir ./backups/2026-03-08T12-00-00 --url https://wiki.example.com
+```
+
+| Confluence | XWiki |
+|------------|-------|
+| Bereich `KB` | Seite `KB` (Titel = Bereichsname); die Confluence-Startseite wird ihr Inhalt |
+| Seitenbaum, Ordner | verschachtelte Seiten (`KB/Seite/Unterseite`) |
+| archivierte Seite | Seite mit Hinweis-Box und Tag `archiviert` |
+| Blogposts | `KB/Blog/<Datum> <Titel>` plus Übersichtsseite `KB/Blog` |
+| Inhalt | Syntax `xhtml/1.0`; Links und Bilder zeigen auf die importierten Seiten/Dateien; Info-/Warnungs-Boxen als XWiki-Boxen |
+| Anhänge | Anhänge der Seite (gestreamt, beliebig gross) |
+| Labels | Tags (plus Tag `confluence`) |
+| Kommentare inkl. Antworten, Inline-Kommentare | Abschnitt „Kommentare aus Confluence“ am Seitenende (Autor, Datum, markierter Text) |
+| Autor, Datum, Version | Herkunftszeile oben auf jeder Seite (XWiki setzt beim Import den importierenden Benutzer) |
+
+- **Wiederholbar:** ein erneuter Lauf überschreibt dieselben Seiten statt Duplikate anzulegen.
+- `--parent Confluence` importiert unterhalb einer Seite „Confluence“ statt auf oberster Ebene.
+- `--dry-run` zeigt die geplanten Seiten, ohne etwas zu schreiben.
+- Nach dem Import prüft das Tool, dass jede Seite existiert (`--verify`, Standard: an).
+- `xwiki-import-report.txt` listet Fehlgeschlagenes, Makro-Platzhalter und nicht auflösbare Verweise.
+- Unverschlüsseltes `http` zu einem nicht-lokalen Server wird verweigert (`--insecure-http` zum Übersteuern).
+
+`import-xwiki` schreibt ausschliesslich in die angegebene XWiki und kontaktiert
+Confluence nie; der Confluence-Client bleibt GET-only.
 
 ## Ausgabestruktur
 
@@ -194,7 +230,7 @@ backups/2026-03-08T12-00-00/
 | SLSA Level 2 | Provenance-Attestation via `actions/attest-build-provenance` |
 | cosign | Keyless-Signing aller Release-Binaries via Sigstore OIDC |
 | HMAC-SHA-256 | Manifest-Signatur jedes Backups (`backup-manifest.sig`) |
-| GET-only API | HTTP-Client exponiert nur `Get()` + `Download()` — kein Schreibzugriff |
+| GET-only API | Der Confluence-Client exponiert nur `Get()` + `Download()` — kein Schreibzugriff auf Confluence. `import-xwiki` schreibt mit einem separaten Client ausschliesslich in die angegebene XWiki |
 | TLS ≥ 1.2 | Explizit erzwungen, Zertifikatsprüfung nicht abschaltbar |
 | Release-Security-Gate | Release blockiert bei offenen `security`-Issues, fehlgeschlagenem govulncheck/gosec/Race-Test oder nicht-NIST-konformer Krypto |
 | CBOM + NIST-Policy | `docs/cbom.cdx.json` (CycloneDX 1.6) gegen NIST SP 800-131A via OPA/conftest geprüft |

@@ -42,6 +42,7 @@ reads). Never reduce an object to a hand-picked struct when writing it.
 | `internal/model/model.go` | Loads a backup dir: spaces, page tree from parentId (incl. folders), posts, attachments, comments, users |
 | `internal/convert/convert.go` | Confluence storage format → clean, well-formed, sanitized XHTML; links/images via a `Resolver`; reports unresolved refs + macro placeholders |
 | `internal/export/export.go` | Static HTML site from a loaded backup (disaster-recovery read access) |
+| `internal/xwiki/` | XWiki REST client + importer (`import-xwiki`): writes ONLY to the given XWiki, never to Confluence |
 | `scripts/check-api-schema.sh` | Credential-free API drift check vs published OpenAPI spec |
 | `scripts/check-cbom.sh` | Anti-staleness: every crypto import must be in the CBOM |
 | `docs/cbom.cdx.json` | CycloneDX 1.6 Cryptography BoM (hand-authored) |
@@ -169,6 +170,11 @@ verified nothing.
   `<ac:link>` would become void
 - The pipeline test `TestPipeline_BackupThenExport` (internal/backup) runs fake Confluence →
   backup → model.Load → export; `CONFLUENCE_EXPORT_PREVIEW=<dir>` keeps the site for a look
+- XWiki import (`TestPipeline_BackupThenXWikiImport` against a fake REST API): space homepage →
+  space WebHome, every page non-terminal (`.../WebHome`), content in `xhtml/1.0`, comments
+  appended to the content (XWiki comment objects would need xwiki/2.1 escaping), origin note
+  with author/date (REST sets the importing user). Idempotent PUTs. Credentials only via
+  XWIKI_USER/XWIKI_PASSWORD or Windows target `xwiki-import`; 401/403 aborts immediately
 
 ## Extending: Adding a New Data Type
 
