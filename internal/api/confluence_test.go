@@ -116,7 +116,7 @@ func TestFetchPages_UsesStorageBodyFormat(t *testing.T) {
 	}
 }
 
-func TestFetchSpaceDetail_UsesV2PropertiesEndpoint(t *testing.T) {
+func TestFetchSpaceProperties_UsesV2Endpoint(t *testing.T) {
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -134,8 +134,7 @@ func TestFetchSpaceDetail_UsesV2PropertiesEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	c := api.NewClient(srv.URL, "u@example.com", "tok")
-	detail, err := api.FetchSpaceDetail(context.Background(), c,
-		api.Space{ID: "123", Key: "KB"})
+	props, err := api.FetchSpaceProperties(context.Background(), c, "123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +150,8 @@ func TestFetchSpaceDetail_UsesV2PropertiesEndpoint(t *testing.T) {
 	if !found {
 		t.Errorf("expected v2 properties path /wiki/api/v2/spaces/123/properties, got: %v", paths)
 	}
-	if len(detail.Properties) != 1 || detail.Properties[0].Key != "theme" {
-		t.Errorf("unexpected properties: %+v", detail.Properties)
+	if len(props) != 1 || !strings.Contains(string(props[0]), `"theme"`) {
+		t.Errorf("unexpected properties: %s", props)
 	}
 }
 
@@ -215,11 +214,11 @@ func TestFetchSpaceLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(labels.Space) != 1 || labels.Space[0].Name != "team" {
-		t.Errorf("unexpected space labels: %+v", labels.Space)
+	if len(labels.Space) != 1 || !strings.Contains(string(labels.Space[0]), `"team"`) {
+		t.Errorf("unexpected space labels: %s", labels.Space)
 	}
-	if len(labels.Content) != 1 || labels.Content[0].Name != "howto" {
-		t.Errorf("unexpected content labels: %+v", labels.Content)
+	if len(labels.Content) != 1 || !strings.Contains(string(labels.Content[0]), `"howto"`) {
+		t.Errorf("unexpected content labels: %s", labels.Content)
 	}
 }
 
@@ -245,8 +244,8 @@ func TestFetchTasks_FiltersBySpace(t *testing.T) {
 	if !strings.Contains(gotQuery, "space-id=42") {
 		t.Errorf("expected space-id filter in query, got: %s", gotQuery)
 	}
-	if len(tasks) != 1 || tasks[0].Status != "incomplete" || tasks[0].Body.Storage.Value != "<p>Do it</p>" {
-		t.Errorf("unexpected tasks: %+v", tasks)
+	if len(tasks) != 1 || !strings.Contains(string(tasks[0]), `"incomplete"`) || !strings.Contains(string(tasks[0]), "Do it") {
+		t.Errorf("unexpected tasks: %s", tasks)
 	}
 }
 
@@ -267,8 +266,8 @@ func TestFetchContentIDsByType_UsesCQLSearch(t *testing.T) {
 	defer srv.Close()
 
 	c := api.NewClient(srv.URL, "u@example.com", "tok")
-	refs, err := api.FetchContentIDsByType(context.Background(), c, "KB", "whiteboard")
-	if err != nil {
+	refs, missing, err := api.FetchContentIDsByType(context.Background(), c, "KB", "whiteboard")
+	if err != nil || missing != 0 {
 		t.Fatal(err)
 	}
 	if !strings.Contains(gotQuery, `space = "KB" and type = whiteboard`) {
@@ -281,7 +280,7 @@ func TestFetchContentIDsByType_UsesCQLSearch(t *testing.T) {
 
 func TestFetchContentIDsByType_RejectsUnknownType(t *testing.T) {
 	c := api.NewClient("https://example.invalid", "u@example.com", "tok")
-	if _, err := api.FetchContentIDsByType(context.Background(), c, "KB", "page"); err == nil {
+	if _, _, err := api.FetchContentIDsByType(context.Background(), c, "KB", "page"); err == nil {
 		t.Error("expected error for unsupported content type")
 	}
 }

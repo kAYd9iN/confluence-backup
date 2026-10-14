@@ -1,9 +1,15 @@
 # confluence-backup — v0.5.0
 
-Backup tool for Confluence Cloud. Backs up spaces, pages (HTML storage format), blog posts,
-comments, attachments, templates, users, space permissions, labels, inline tasks,
+Backup tool for Confluence Cloud, built as a disaster-recovery source: the data must be
+restorable into another wiki without Confluence. Backs up spaces, pages (current AND
+archived, storage format), blog posts, comments with reply threads, attachment files,
+templates, users, space permissions, labels, properties, version metadata, inline tasks,
 custom content, and smart content metadata (whiteboards, databases, folders, embeds)
 into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
+
+**Lossless by design**: every API object is stored as the raw JSON Confluence returned
+(`Raw json.RawMessage` on the typed structs; typed fields are only what the backup logic
+reads). Never reduce an object to a hand-picked struct when writing it.
 
 ## Commands
 
@@ -54,11 +60,23 @@ into a hierarchical directory structure with HMAC-SHA-256 signed manifest.
 - **Cloud ID**: set `CONFLUENCE_CLOUD_ID` to skip auto-discovery (recommended; auto-discovery requires `read:me` scope)
 - **Space-scoped endpoints**: `/wiki/api/v2/spaces/{id}/pages` — avoids API Gateway filter bug
 - **Body format**: `storage` (Confluence native XML) — `view` not supported by API Gateway
-- **Cursor pagination**: follows _links.next until exhausted
+- **Pagination**: v2 follows `_links.next` (cursor); v1 (`FetchAllV1`: CQL search,
+  templates) also follows `_links.next` — the server caps `limit` ("fixed system
+  limits"), so a short page is NOT the end — with an offset fallback via `start`.
+  Next links: only path+query are used, never a host; must stay under /wiki/rest/api/
+- **Comments**: v2 lists return ROOT comments only; replies come from
+  `/{footer|inline}-comments/{id}/children`, nested under `"replies"`
+- **Failures are never silent**: everything goes through the `recorder` in
+  internal/backup/backup.go; a fetch/write/hash failure becomes a `failed` manifest
+  entry and `Run` returns an error (exit code 1)
 - **Two-level pool**: 3 concurrent spaces, 20 concurrent pages (global cap)
 - **Hierarchical output**: `spaces/KEY/pages/Title/SubTitle/index.html`
 - **Backup dir timestamp**: local timezone (not UTC)
-- **Attachments**: metadata always; files only with --attachments flag
+- **Attachments**: metadata + files by default (`--attachments=false`: metadata only);
+  download via the documented v1 endpoint `AttachmentDownloadPath` (works with Basic and
+  gateway Bearer auth), falling back to `/wiki` + `downloadLink`. Separate HTTP client
+  without overall timeout (large files); redirects only same-host or https *.atlassian.com/.net.
+  Stored as `attachments/files/<attachmentId>_<title>` (ID prevents collisions)
 - **Smart content** (whiteboards, databases, folders, embeds): no v2 list
   endpoints — discovered per space via v1 CQL search, fetched by ID;
   **metadata only** (canvas/database contents are not exportable via API)
@@ -140,7 +158,11 @@ verified nothing.
 
 ## Extending: Adding a New Data Type
 
-1. Add fetch function to internal/api/confluence.go (use space-scoped endpoint)
-2. Call it in internal/backup/backup.go (processSpace or Run)
-3. Run go test ./... to verify
-4. Commit
+1. Add fetch function to internal/api/confluence.go (use space-scoped endpoint);
+   return the raw JSON objects
+2. Call it in internal/backup/backup.go (processSpace / writeContent) and write
+   through the `recorder` (`rec.writeJSON` / `rec.fail`) — never just `slog.Warn`
+3. Add the endpoint to `ENDPOINTS` in scripts/check-api-schema.sh and regenerate
+   docs/api-snapshot.json by running the script
+4. Extend the fake server in internal/backup/backup_test.go and run go test ./...
+5. Commit

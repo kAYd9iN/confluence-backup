@@ -1,13 +1,16 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kAYd9iN/confluence-backup/internal/api"
@@ -42,7 +45,69 @@ func FormatBackupDir(t time.Time) string {
 	return t.Format("2006-01-02T15-04-05")
 }
 
+// recorder writes backup files and records every outcome in the manifest.
+// Anything that could not be backed up becomes a "failed" manifest entry and
+// makes the run report an error — a partial backup must never look complete.
+type recorder struct {
+	w        *storage.Writer
+	manifest *Manifest
+	dryRun   bool
+	failures atomic.Int64
+}
+
+// fail records that item (a backup-relative path or a descriptive name) was
+// not backed up.
+func (r *recorder) fail(item string, err error) {
+	r.failures.Add(1)
+	r.manifest.AddFailedFile(filepath.ToSlash(item), err)
+	slog.Warn("not backed up", "item", sanitizeLog(filepath.ToSlash(item)), "err", sanitizeLog(err.Error()))
+}
+
+// write stores data at relPath and adds it to the manifest.
+func (r *recorder) write(relPath string, data []byte) bool {
+	if r.dryRun {
+		return true
+	}
+	if err := r.w.WriteFile(relPath, data); err != nil {
+		r.fail(relPath, err)
+		return false
+	}
+	return r.hash(relPath)
+}
+
+func (r *recorder) writeJSON(relPath string, v any) bool {
+	data, err := marshalJSON(v, true)
+	if err != nil {
+		r.fail(relPath, fmt.Errorf("marshal: %w", err))
+		return false
+	}
+	return r.write(relPath, data)
+}
+
+func (r *recorder) writeStream(relPath string, src io.Reader) bool {
+	if r.dryRun {
+		return true
+	}
+	if err := r.w.WriteBinaryStream(relPath, src); err != nil {
+		r.fail(relPath, err)
+		return false
+	}
+	return r.hash(relPath)
+}
+
+// hash adds a written file to the manifest. A file that cannot be hashed is
+// not verifiable, so it counts as not backed up.
+func (r *recorder) hash(relPath string) bool {
+	if err := r.manifest.AddFile(filepath.Join(r.w.Dir(), relPath)); err != nil {
+		r.fail(relPath, fmt.Errorf("manifest: %w", err))
+		return false
+	}
+	return true
+}
+
 // Run executes the full backup and returns the path to the created backup directory.
+// It returns an error when anything could not be backed up; the backup
+// directory is still returned so the manifest (with the failures) can be signed.
 func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 	ts := time.Now()
 	backupDir := filepath.Join(cfg.OutputDir, FormatBackupDir(ts))
@@ -59,6 +124,7 @@ func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 	// Record file names relative to the backup root so each manifest entry maps
 	// to a unique file and can be re-hashed during verify.
 	manifest.Root = w.Dir()
+	rec := &recorder{w: w, manifest: manifest, dryRun: cfg.DryRun}
 
 	// --- Fetch all spaces ---
 	spaces, err := api.FetchSpaces(ctx, client)
@@ -77,32 +143,15 @@ func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 		active = append(active, s)
 	}
 
-	// --- Collect all user account IDs ---
-	var userMu sync.Mutex
-	accountIDs := make(map[string]struct{})
-	collectUser := func(id string) {
-		if id == "" {
-			return
-		}
-		userMu.Lock()
-		accountIDs[id] = struct{}{}
-		userMu.Unlock()
-	}
+	// --- Collect all user account IDs (authors, owners, commenters) ---
+	users := newUserSet()
 
 	// --- Process spaces (3 concurrent) ---
 	spaceSem := make(chan struct{}, 3)
 	pageSem := make(chan struct{}, 20) // global cap across all spaces
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errs []error
-
-	addErr := func(err error) {
-		mu.Lock()
-		errs = append(errs, err)
-		mu.Unlock()
-	}
-
+	var spaceErrs atomic.Int64
 	for _, sp := range active {
 		sp := sp
 		wg.Add(1)
@@ -111,383 +160,397 @@ func Run(ctx context.Context, client *api.Client, cfg Config) (string, error) {
 			spaceSem <- struct{}{}
 			defer func() { <-spaceSem }()
 
-			if err := processSpace(ctx, client, w, manifest, sp, cfg,
-				pageSem, collectUser); err != nil {
-				addErr(fmt.Errorf("space %s: %w", sp.Key, err))
-				slog.Error("space backup failed", "key", sp.Key, "err", err)
+			if err := processSpace(ctx, client, rec, sp, cfg, pageSem, users); err != nil {
+				spaceErrs.Add(1)
+				rec.fail(filepath.Join("spaces", sp.Key), err)
 			}
 		}()
 	}
 	wg.Wait()
 
 	// --- Fetch user profiles ---
-	if err := fetchAndWriteUsers(ctx, client, w, manifest, accountIDs); err != nil {
-		slog.Warn("user profiles partially failed", "err", err)
-	}
+	fetchAndWriteUsers(ctx, client, rec, users.ids())
 
 	// --- Write unsigned manifest (signing happens in main after Run returns) ---
-	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
-	w.WriteFile("backup-manifest.json", manifestData) // #nosec G104 -- error logged or non-critical in backup context
+	manifestData, _ := json.MarshalIndent(manifest, "", "  ") // manifest format unchanged (signed by main)
+	w.WriteFile("backup-manifest.json", manifestData)         // #nosec G104 -- main re-reads, signs and rewrites it
 
-	if len(errs) > 0 {
-		return w.Dir(), fmt.Errorf("%d space(s) had errors: first: %w", len(errs), errs[0])
+	if n := rec.failures.Load(); n > 0 {
+		return w.Dir(), fmt.Errorf("%d item(s) could not be backed up (%d space(s) failed) — see the \"failed\" entries in backup-manifest.json",
+			n, spaceErrs.Load())
 	}
 	return w.Dir(), nil
 }
 
-func processSpace(ctx context.Context, client *api.Client, w *storage.Writer,
-	manifest *Manifest, sp api.Space, cfg Config,
-	pageSem chan struct{}, collectUser func(string)) error {
+// spaceRecord is what space.json contains: the raw space object plus its
+// permissions and properties.
+func spaceRecord(sp api.Space, perms, props []json.RawMessage) (map[string]json.RawMessage, error) {
+	rec := map[string]json.RawMessage{}
+	if len(sp.Raw) > 0 {
+		if err := json.Unmarshal(sp.Raw, &rec); err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	if rec["permissions"], err = marshalJSON(nonNil(perms), false); err != nil {
+		return nil, err
+	}
+	if props != nil {
+		if rec["properties"], err = marshalJSON(props, false); err != nil {
+			return nil, err
+		}
+	}
+	return rec, nil
+}
+
+func nonNil(items []json.RawMessage) []json.RawMessage {
+	if items == nil {
+		return []json.RawMessage{}
+	}
+	return items
+}
+
+func processSpace(ctx context.Context, client *api.Client, rec *recorder, sp api.Space, cfg Config,
+	pageSem chan struct{}, users *userSet) error {
 
 	slog.Info("backing up space", "key", sanitizeLog(sp.Key), "name", sanitizeLog(sp.Name))
+	spaceDir := filepath.Join("spaces", storage.SanitizeName(sp.Key))
+	users.addFrom(sp.Raw)
 
-	// Space detail (permissions + properties)
-	detail, err := api.FetchSpaceDetail(ctx, client, sp)
+	// space.json: space object, permissions (required) and properties.
+	perms, err := api.FetchSpacePermissions(ctx, client, sp.ID)
 	if err != nil {
 		return err
 	}
-	spaceJSON, _ := json.MarshalIndent(detail, "", "  ")
-	relPath := filepath.Join("spaces", sp.Key, "space.json")
-	if !cfg.DryRun {
-		if err := w.WriteFile(relPath, spaceJSON); err != nil {
-			return err
-		}
-		if err := manifest.AddFile(filepath.Join(w.Dir(), relPath)); err != nil {
-			slog.Warn("manifest update failed", "path", relPath, "err", err)
-		}
+	props, err := api.FetchSpaceProperties(ctx, client, sp.ID)
+	if err != nil {
+		rec.fail(filepath.Join(spaceDir, "space.json#properties"), err)
+	}
+	record, err := spaceRecord(sp, perms, props)
+	if err != nil {
+		return fmt.Errorf("build space record: %w", err)
+	}
+	if !rec.writeJSON(filepath.Join(spaceDir, "space.json"), record) {
+		return fmt.Errorf("space.json could not be written")
 	}
 
 	// Templates
-	templates, err := api.FetchTemplates(ctx, client, sp.Key)
-	if err != nil {
-		slog.Warn("templates fetch failed", "space", sp.Key, "err", err)
-	}
-	for _, tmpl := range templates {
-		tJSON, err := json.MarshalIndent(tmpl, "", "  ")
-		if err != nil {
-			slog.Warn("template marshal failed", "space", sp.Key, "name", tmpl.Name, "err", err)
-			continue
-		}
-		// Include the unique template ID in the filename: many templates share
-		// a display name (e.g. several "Default index page template" blueprints,
-		// plus page+blueprint variants), which would otherwise sanitise to the
-		// same path and silently overwrite each other.
-		tName := storage.SanitizeName(tmpl.Name)
-		if tName == "" {
-			tName = "template"
-		}
-		tPath := filepath.Join("spaces", sp.Key, "templates",
-			tName+"_"+storage.SanitizeName(tmpl.TemplateID)+".json")
-		if !cfg.DryRun {
-			if err := w.WriteFile(tPath, tJSON); err != nil {
-				slog.Warn("template write failed", "space", sp.Key, "name", tmpl.Name, "err", err)
-			} else if err := manifest.AddFile(filepath.Join(w.Dir(), tPath)); err != nil {
-				slog.Warn("manifest update failed", "path", tPath, "err", err)
+	if templates, err := api.FetchTemplates(ctx, client, sp.Key); err != nil {
+		rec.fail(filepath.Join(spaceDir, "templates"), err)
+	} else {
+		for _, tmpl := range templates {
+			// Include the unique template ID in the filename: many templates share
+			// a display name (e.g. several "Default index page template" blueprints,
+			// plus page+blueprint variants), which would otherwise sanitise to the
+			// same path and silently overwrite each other.
+			tName := safeName(tmpl.Name, 80)
+			if tName == "" {
+				tName = "template"
 			}
+			rec.write(filepath.Join(spaceDir, "templates",
+				tName+"_"+storage.SanitizeName(tmpl.TemplateID)+".json"), indentRaw(tmpl.Raw))
 		}
 	}
 
-	// Pages (flat fetch → build tree → write recursively)
+	// Pages (flat fetch → build tree → write recursively). Current and archived.
 	pages, err := api.FetchPages(ctx, client, sp.ID)
 	if err != nil {
 		return fmt.Errorf("fetch pages: %w", err)
 	}
-	for _, p := range pages {
-		collectUser(p.Version.AuthorID)
-	}
-
 	roots := BuildTree(pages)
 	var pageWg sync.WaitGroup
-	var pageErrs []error
-	var pageErrMu sync.Mutex
-
 	var writeTree func(nodes []*PageNode, parentRelPath string, depth int)
 	writeTree = func(nodes []*PageNode, parentRelPath string, depth int) {
 		if depth > maxTreeDepth {
-			slog.Warn("page tree depth limit reached — skipping subtree", "depth", depth, "limit", maxTreeDepth)
+			rec.fail(parentRelPath, fmt.Errorf("page tree deeper than %d levels — subtree skipped", maxTreeDepth))
 			return
 		}
 		for _, node := range nodes {
 			node := node
+			dirPath := filepath.Join(parentRelPath, node.DirName())
 			pageWg.Add(1)
 			go func() {
 				defer pageWg.Done()
 				pageSem <- struct{}{}
 				defer func() { <-pageSem }()
-
-				dirPath := filepath.Join(parentRelPath, node.DirName())
-				if err := writePage(ctx, client, w, manifest, node.Page,
-					dirPath, cfg); err != nil {
-					pageErrMu.Lock()
-					pageErrs = append(pageErrs, err)
-					pageErrMu.Unlock()
-					manifest.AddFailedFile(dirPath+"/page.json", err)
-					slog.Error("page backup failed",
-						"id", node.Page.ID,
-						"title", sanitizeLog(node.Page.Title),
-						"err", err)
-				}
-				writeTree(node.Children, dirPath, depth+1)
+				writeContent(ctx, client, rec, api.ContainerPage, node.Page, dirPath, "page.json", cfg, users)
 			}()
+			writeTree(node.Children, dirPath, depth+1)
 		}
 	}
-	writeTree(roots, filepath.Join("spaces", sp.Key, "pages"), 0)
+	writeTree(roots, filepath.Join(spaceDir, "pages"), 0)
 	pageWg.Wait()
 
-	// Blog posts
+	// Blog posts — same treatment as pages (comments, attachments, labels, …).
 	posts, err := api.FetchBlogPosts(ctx, client, sp.ID)
 	if err != nil {
-		slog.Warn("blog posts fetch failed", "space", sp.Key, "err", err)
+		rec.fail(filepath.Join(spaceDir, "blog"), err)
 	}
-	for _, post := range posts {
-		post := post
-		dirName := post.Version.CreatedAt[:10] + "_" + storage.SanitizeName(post.Title)
-		dirPath := filepath.Join("spaces", sp.Key, "blog", dirName)
-		if !cfg.DryRun {
-			writePost(ctx, client, w, manifest, post, dirPath)
-		}
+	for _, dirName := range blogDirNames(posts) {
+		post, name := dirName.post, dirName.name
+		pageWg.Add(1)
+		go func() {
+			defer pageWg.Done()
+			pageSem <- struct{}{}
+			defer func() { <-pageSem }()
+			writeContent(ctx, client, rec, api.ContainerBlogPost, post, filepath.Join(spaceDir, "blog", name), "post.json", cfg, users)
+		}()
 	}
+	pageWg.Wait()
 
 	// Labels, tasks, custom content, and smart content (whiteboards,
-	// databases, folders, embeds) — all non-critical: log and continue.
-	if !cfg.DryRun {
-		writeSpaceExtras(ctx, client, w, manifest, sp)
-	}
-
-	if len(pageErrs) > 0 {
-		return fmt.Errorf("%d page(s) failed", len(pageErrs))
-	}
+	// databases, folders, embeds).
+	writeSpaceExtras(ctx, client, rec, sp, spaceDir, users)
 	return nil
 }
 
-// writeSpaceExtras backs up labels, inline tasks, custom content, and smart
-// content types (whiteboards, databases, folders, embeds) for one space.
-// All fetches are non-critical — failures are logged, the backup continues.
-func writeSpaceExtras(ctx context.Context, client *api.Client, w *storage.Writer,
-	manifest *Manifest, sp api.Space) {
-
-	writeJSON := func(relPath string, v any) {
-		data, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			slog.Warn("marshal failed", "path", relPath, "err", err)
-			return
-		}
-		if err := w.WriteFile(relPath, data); err != nil {
-			slog.Warn("write failed", "path", relPath, "err", err)
-			return
-		}
-		if err := manifest.AddFile(filepath.Join(w.Dir(), relPath)); err != nil {
-			slog.Warn("manifest update failed", "path", relPath, "err", err)
-		}
-	}
-
-	// Labels (space-level + content labels)
-	if labels, err := api.FetchSpaceLabels(ctx, client, sp.ID); err != nil {
-		slog.Warn("labels fetch failed", "space", sanitizeLog(sp.Key), "err", err)
-	} else if len(labels.Space) > 0 || len(labels.Content) > 0 {
-		writeJSON(filepath.Join("spaces", sp.Key, "labels.json"), labels)
-	}
-
-	// Inline tasks
-	if tasks, err := api.FetchTasks(ctx, client, sp.ID); err != nil {
-		slog.Warn("tasks fetch failed", "space", sanitizeLog(sp.Key), "err", err)
-	} else if len(tasks) > 0 {
-		writeJSON(filepath.Join("spaces", sp.Key, "tasks.json"), tasks)
-	}
-
-	// Custom content (app-defined types, raw JSON)
-	if custom, err := api.FetchCustomContent(ctx, client, sp.ID); err != nil {
-		slog.Warn("custom content fetch failed", "space", sanitizeLog(sp.Key), "err", err)
-	} else if len(custom) > 0 {
-		writeJSON(filepath.Join("spaces", sp.Key, "custom-content.json"), custom)
-	}
-
-	// Whiteboards, databases, folders, embeds — discovered via CQL search
-	// (v2 has no list endpoints for these), then fetched by ID. The v2 API
-	// exposes metadata only; whiteboard/database contents are not exportable.
-	for _, contentType := range api.SmartContentTypes() {
-		refs, err := api.FetchContentIDsByType(ctx, client, sp.Key, contentType)
-		if err != nil {
-			slog.Warn("content discovery failed",
-				"space", sanitizeLog(sp.Key), "type", contentType, "err", err)
-			continue
-		}
-		for _, ref := range refs {
-			item, err := api.FetchContentItem(ctx, client, contentType, ref.ID)
-			if err != nil {
-				slog.Warn("content fetch failed",
-					"space", sanitizeLog(sp.Key), "type", contentType, "id", ref.ID, "err", err)
-				continue
-			}
-			name := ref.ID
-			if ref.Title != "" {
-				name += "_" + storage.SanitizeName(ref.Title)
-			}
-			writeJSON(filepath.Join("spaces", sp.Key, contentType+"s", name+".json"), item)
-		}
-	}
+type blogDir struct {
+	post api.BlogPost
+	name string
 }
 
-func writePage(ctx context.Context, client *api.Client, w *storage.Writer,
-	manifest *Manifest, page api.Page, dirPath string, cfg Config) error {
-
-	// index.html — failure is fatal for this page
-	htmlPath := filepath.Join(dirPath, "index.html")
-	if !cfg.DryRun {
-		if err := w.WriteFile(htmlPath, []byte(page.Body.Storage.Value)); err != nil {
-			return err
+// blogDirNames assigns each blog post a unique "YYYY-MM-DD_title" directory.
+func blogDirNames(posts []api.BlogPost) []blogDir {
+	out := make([]blogDir, 0, len(posts))
+	seen := map[string]bool{}
+	for _, p := range posts {
+		date := p.CreatedAt
+		if date == "" {
+			date = p.Version.CreatedAt
 		}
-		if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
-			slog.Warn("manifest update failed", "path", htmlPath, "err", err)
-		}
-	}
-
-	// page.json (metadata without body) — failure is fatal for this page
-	meta := struct {
-		ID       string          `json:"id"`
-		Title    string          `json:"title"`
-		SpaceID  string          `json:"spaceId"`
-		ParentID string          `json:"parentId,omitempty"`
-		Status   string          `json:"status"`
-		Version  api.PageVersion `json:"version"`
-		Labels   []api.Label     `json:"labels,omitempty"`
-	}{
-		ID: page.ID, Title: page.Title, SpaceID: page.SpaceID,
-		ParentID: page.ParentID, Status: page.Status,
-		Version: page.Version, Labels: page.Labels,
-	}
-	metaJSON, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal page metadata: %w", err)
-	}
-	metaPath := filepath.Join(dirPath, "page.json")
-	if !cfg.DryRun {
-		if err := w.WriteFile(metaPath, metaJSON); err != nil {
-			return err
-		}
-		if err := manifest.AddFile(filepath.Join(w.Dir(), metaPath)); err != nil {
-			slog.Warn("manifest update failed", "path", metaPath, "err", err)
-		}
-	}
-
-	// comments.json — non-critical, log and continue on failure
-	comments, err := api.FetchComments(ctx, client, page.ID)
-	if err != nil {
-		slog.Warn("comments fetch failed", "pageId", page.ID, "err", err)
-	} else if !cfg.DryRun {
-		cJSON, err := json.MarshalIndent(comments, "", "  ")
-		if err != nil {
-			slog.Warn("comments marshal failed", "pageId", page.ID, "err", err)
+		if len(date) >= 10 {
+			date = date[:10]
 		} else {
-			cPath := filepath.Join(dirPath, "comments.json")
-			if err := w.WriteFile(cPath, cJSON); err != nil {
-				slog.Warn("comments write failed", "pageId", page.ID, "err", err)
-			} else if err := manifest.AddFile(filepath.Join(w.Dir(), cPath)); err != nil {
-				slog.Warn("manifest update failed", "path", cPath, "err", err)
-			}
+			date = "undated"
 		}
+		name := date + "_" + safeName(p.Title, 80)
+		if seen[name] || safeName(p.Title, 80) == "" {
+			name += "_" + storage.SanitizeName(p.ID)
+		}
+		seen[name] = true
+		out = append(out, blogDir{post: p, name: name})
 	}
-
-	// attachments — non-critical, log and continue on failure
-	atts, err := api.FetchAttachmentMeta(ctx, client, page.ID)
-	if err != nil {
-		slog.Warn("attachments fetch failed", "pageId", page.ID, "err", err)
-	} else if !cfg.DryRun {
-		attJSON, err := json.MarshalIndent(atts, "", "  ")
-		if err != nil {
-			slog.Warn("attachments marshal failed", "pageId", page.ID, "err", err)
-		} else {
-			attPath := filepath.Join(dirPath, "attachments", "metadata.json")
-			if err := w.WriteFile(attPath, attJSON); err != nil {
-				slog.Warn("attachments metadata write failed", "pageId", page.ID, "err", err)
-			} else if err := manifest.AddFile(filepath.Join(w.Dir(), attPath)); err != nil {
-				slog.Warn("manifest update failed", "path", attPath, "err", err)
-			}
-		}
-		if cfg.IncludeAttachments {
-			downloadAttachments(ctx, client, w, manifest, atts, dirPath)
-		}
-	}
-
-	return nil
+	return out
 }
 
-func writePost(_ context.Context, _ *api.Client, w *storage.Writer,
-	manifest *Manifest, post api.BlogPost, dirPath string) {
-	htmlPath := filepath.Join(dirPath, "index.html")
-	if err := w.WriteFile(htmlPath, []byte(post.Body.Storage.Value)); err != nil {
-		slog.Warn("blog post html write failed", "postId", post.ID, "err", err)
-	} else if err := manifest.AddFile(filepath.Join(w.Dir(), htmlPath)); err != nil {
-		slog.Warn("manifest update failed", "path", htmlPath, "err", err)
-	}
+// writeContent backs up one page or blog post into dirPath:
+//
+//	index.html                 storage-format body (Confluence XHTML)
+//	page.json | post.json      the complete API object without its body
+//	comments.json              footer + inline comments, each with its reply thread
+//	labels.json, properties.json, versions.json
+//	attachments/metadata.json  complete attachment records
+//	attachments/files/<id>_<name>
+//
+// Every part that fails is recorded; the others are still written.
+func writeContent(ctx context.Context, client *api.Client, rec *recorder, c api.Container,
+	p api.Page, dirPath, metaFile string, cfg Config, users *userSet) {
 
-	postJSON, err := json.MarshalIndent(post, "", "  ")
-	if err != nil {
-		slog.Warn("blog post marshal failed", "postId", post.ID, "err", err)
+	users.addFrom(p.Raw)
+
+	if !rec.write(filepath.Join(dirPath, "index.html"), []byte(p.Body.Storage.Value)) {
 		return
 	}
-	jsonPath := filepath.Join(dirPath, "post.json")
-	if err := w.WriteFile(jsonPath, postJSON); err != nil {
-		slog.Warn("blog post json write failed", "postId", post.ID, "err", err)
-	} else if err := manifest.AddFile(filepath.Join(w.Dir(), jsonPath)); err != nil {
-		slog.Warn("manifest update failed", "path", jsonPath, "err", err)
+	meta, err := withoutBody(p.Raw)
+	if err != nil {
+		rec.fail(filepath.Join(dirPath, metaFile), err)
+	} else {
+		rec.write(filepath.Join(dirPath, metaFile), meta)
+	}
+
+	if comments, n, err := api.FetchCommentTree(ctx, client, c, p.ID); err != nil {
+		rec.fail(filepath.Join(dirPath, "comments.json"), err)
+	} else if n > 0 {
+		for _, cm := range append(append([]json.RawMessage{}, comments.Footer...), comments.Inline...) {
+			users.addFromTree(cm)
+		}
+		rec.writeJSON(filepath.Join(dirPath, "comments.json"), comments)
+	}
+
+	for _, sub := range []string{"labels", "properties", "versions"} {
+		items, err := api.FetchContentList(ctx, client, c, p.ID, sub)
+		if err != nil {
+			rec.fail(filepath.Join(dirPath, sub+".json"), err)
+			continue
+		}
+		if len(items) > 0 {
+			rec.writeJSON(filepath.Join(dirPath, sub+".json"), items)
+		}
+	}
+
+	atts, err := api.FetchAttachments(ctx, client, c, p.ID)
+	if err != nil {
+		rec.fail(filepath.Join(dirPath, "attachments"), err)
+		return
+	}
+	if len(atts) == 0 {
+		return
+	}
+	raws := make([]json.RawMessage, len(atts))
+	for i, a := range atts {
+		raws[i] = a.Raw
+		users.addFrom(a.Raw)
+	}
+	rec.writeJSON(filepath.Join(dirPath, "attachments", "metadata.json"), raws)
+	if cfg.IncludeAttachments && !cfg.DryRun {
+		downloadAttachments(ctx, client, rec, p.ID, atts, dirPath)
 	}
 }
 
-func downloadAttachments(ctx context.Context, client *api.Client, w *storage.Writer,
-	manifest *Manifest, atts []api.Attachment, dirPath string) {
+// withoutBody returns the indented JSON object minus its "body" field (the
+// body is stored separately as index.html).
+func withoutBody(raw json.RawMessage) ([]byte, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("parse content object: %w", err)
+	}
+	delete(obj, "body")
+	return marshalJSON(obj, true)
+}
+
+// indentRaw pretty-prints a raw JSON object (falls back to the input).
+func indentRaw(raw json.RawMessage) []byte {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return raw
+	}
+	b, err := marshalJSON(v, true)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
+// AttachmentFileName is the file name an attachment is stored under:
+// "<attachment id>_<sanitized title>". The ID keeps two attachments whose
+// titles sanitize to the same string from overwriting each other.
+func AttachmentFileName(a api.Attachment) string {
+	name := safeName(a.Title, 120)
+	if name == "" {
+		name = "file"
+	}
+	return storage.SanitizeName(a.ID) + "_" + name
+}
+
+func downloadAttachments(ctx context.Context, client *api.Client, rec *recorder,
+	containerID string, atts []api.Attachment, dirPath string) {
 	sem := make(chan struct{}, 5)
 	var wg sync.WaitGroup
 	for _, att := range atts {
 		att := att
-		if att.Links.Download == "" {
-			continue
-		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			downloadURL := client.BaseURL() + att.Links.Download
-			rc, err := client.Download(ctx, downloadURL)
+			filePath := filepath.Join(dirPath, "attachments", "files", AttachmentFileName(att))
+			rc, err := openAttachment(ctx, client, containerID, att)
 			if err != nil {
-				slog.Warn("attachment download failed", "name", att.Title, "err", err)
+				rec.fail(filePath, err)
 				return
 			}
 			defer rc.Close()
-			filePath := filepath.Join(dirPath, "attachments", "files",
-				storage.SanitizeName(att.Title))
-			if err := w.WriteBinaryStream(filePath, rc); err != nil {
-				slog.Warn("attachment write failed", "name", att.Title, "err", err)
-				return
-			}
-			if err := manifest.AddFile(filepath.Join(w.Dir(), filePath)); err != nil {
-				slog.Warn("manifest update failed", "path", filePath, "err", err)
-			}
+			rec.writeStream(filePath, rc)
 		}()
 	}
 	wg.Wait()
 }
 
-func fetchAndWriteUsers(ctx context.Context, client *api.Client, w *storage.Writer,
-	manifest *Manifest, accountIDs map[string]struct{}) error {
-	users := make([]api.User, 0, len(accountIDs))
-	for id := range accountIDs {
+// openAttachment downloads via the documented v1 endpoint and falls back to
+// the attachment's own download link (relative to the /wiki context).
+func openAttachment(ctx context.Context, client *api.Client, containerID string, att api.Attachment) (io.ReadCloser, error) {
+	rc, err := client.DownloadPath(ctx, api.AttachmentDownloadPath(containerID, att.ID))
+	if err == nil {
+		return rc, nil
+	}
+	link := att.DownloadLink
+	if link == "" {
+		link = att.Links.Download
+	}
+	if len(link) > 0 && link[0] == '/' {
+		if rc, err2 := client.DownloadPath(ctx, "/wiki"+link); err2 == nil {
+			return rc, nil
+		}
+	}
+	return nil, err
+}
+
+// writeSpaceExtras backs up labels, inline tasks, custom content, and smart
+// content types (whiteboards, databases, folders, embeds) for one space.
+func writeSpaceExtras(ctx context.Context, client *api.Client, rec *recorder, sp api.Space, spaceDir string, users *userSet) {
+	if labels, err := api.FetchSpaceLabels(ctx, client, sp.ID); err != nil {
+		rec.fail(filepath.Join(spaceDir, "labels.json"), err)
+	} else if len(labels.Space) > 0 || len(labels.Content) > 0 {
+		rec.writeJSON(filepath.Join(spaceDir, "labels.json"), labels)
+	}
+
+	if tasks, err := api.FetchTasks(ctx, client, sp.ID); err != nil {
+		rec.fail(filepath.Join(spaceDir, "tasks.json"), err)
+	} else if len(tasks) > 0 {
+		rec.writeJSON(filepath.Join(spaceDir, "tasks.json"), tasks)
+	}
+
+	if custom, err := api.FetchCustomContent(ctx, client, sp.ID); err != nil {
+		rec.fail(filepath.Join(spaceDir, "custom-content.json"), err)
+	} else if len(custom) > 0 {
+		rec.writeJSON(filepath.Join(spaceDir, "custom-content.json"), custom)
+	}
+
+	// Whiteboards, databases, folders, embeds — discovered via CQL search
+	// (v2 has no list endpoints for these), then fetched by ID. The v2 API
+	// exposes metadata only; whiteboard/database contents are not exportable.
+	// Folders matter for restore: pages can sit below a folder (parentType).
+	for _, contentType := range api.SmartContentTypes() {
+		typeDir := filepath.Join(spaceDir, contentType+"s")
+		refs, missing, err := api.FetchContentIDsByType(ctx, client, sp.Key, contentType)
+		if err != nil {
+			rec.fail(typeDir, err)
+			continue
+		}
+		if missing > 0 {
+			rec.fail(typeDir, fmt.Errorf("search announced %d more %s(s) than it returned", missing, contentType))
+		}
+		for _, ref := range refs {
+			item, err := api.FetchContentItem(ctx, client, contentType, ref.ID)
+			name := storage.SanitizeName(ref.ID)
+			if t := safeName(ref.Title, 80); t != "" {
+				name += "_" + t
+			}
+			if err != nil {
+				rec.fail(filepath.Join(typeDir, name+".json"), err)
+				continue
+			}
+			users.addFrom(item)
+			rec.write(filepath.Join(typeDir, name+".json"), indentRaw(item))
+		}
+	}
+}
+
+func fetchAndWriteUsers(ctx context.Context, client *api.Client, rec *recorder, accountIDs []string) {
+	users := make([]json.RawMessage, 0, len(accountIDs))
+	for _, id := range accountIDs {
 		u, err := api.FetchUserProfile(ctx, client, id)
 		if err != nil {
-			slog.Warn("user profile fetch failed", "accountId", id, "err", err)
+			rec.fail("users.json#"+id, err)
 			continue
 		}
 		users = append(users, u)
 	}
-	usersJSON, _ := json.MarshalIndent(users, "", "  ")
-	usersPath := "users.json"
-	if err := w.WriteFile(usersPath, usersJSON); err != nil {
-		return err
+	rec.writeJSON("users.json", users)
+}
+
+// marshalJSON encodes v without HTML escaping, so the HTML in page bodies,
+// comments and descriptions stays readable in the backup files.
+func marshalJSON(v any, indent bool) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if indent {
+		enc.SetIndent("", "  ")
 	}
-	if err := manifest.AddFile(filepath.Join(w.Dir(), usersPath)); err != nil {
-		slog.Warn("manifest update failed", "path", usersPath, "err", err)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
 	}
-	return nil
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }

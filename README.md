@@ -1,14 +1,24 @@
 # confluence-backup
 
-Automatisiertes Backup-Werkzeug für Confluence Cloud — sichert Spaces, Pages (HTML),
-Blog-Posts, Kommentare, Anhänge, Templates, Benutzerprofile, Space-Berechtigungen,
-Labels, Inline-Tasks, Custom Content und Smart-Content-Metadaten (Whiteboards,
-Databases, Folders, Embeds) in eine hierarchische Verzeichnisstruktur mit
+Automatisiertes Backup-Werkzeug für Confluence Cloud — sichert Spaces, Pages (aktuelle
+und archivierte, im Confluence-Storage-Format), Blog-Posts, Kommentare samt Antworten,
+Anhänge (Dateien), Templates, Benutzerprofile, Space-Berechtigungen, Labels, Eigenschaften,
+Versionshistorie (Metadaten), Inline-Tasks, Custom Content und Smart-Content-Metadaten
+(Whiteboards, Databases, Folders, Embeds) in eine hierarchische Verzeichnisstruktur mit
 HMAC-SHA-256-signiertem Manifest.
+
+Ziel ist ein **Notfall-Backup**: Die Daten werden verlustfrei als vollständige
+API-Objekte gesichert, damit sie ohne Confluence in ein anderes Wiki eingespielt
+werden können.
 
 ## Features
 
-- Sichert 12 Confluence-Datentypen inkl. Labels, Tasks, Custom Content und Smart-Content-Metadaten — Whiteboards, Databases, Folders, Embeds (GET-only, kein Schreibzugriff)
+- Sichert alle Inhalte eines Spaces (GET-only, kein Schreibzugriff); jedes API-Objekt
+  wird vollständig gespeichert (Reihenfolge, Autoren, Inline-Kommentar-Anker, …)
+- Vollständigkeit: jede Liste wird über alle Seiten gelesen (v2-Cursor bzw. v1 `_links.next`);
+  meldet die Suche mehr Treffer als geliefert, wird das als Fehler erfasst
+- Nichts geht still verloren: jeder fehlgeschlagene Abruf steht als `failed` im
+  Manifest, und der Lauf endet mit Exit-Code 1
 - SHA256-Hashes pro Datei + HMAC-SHA-256-Manifest-Signatur
 - Zweistufiger Worker Pool (3 Spaces × 20 Pages global), Rate-Limiter (10 req/s)
 - Hierarchische Ausgabe: `spaces/KEY/pages/Titel/Untertitel/index.html`
@@ -75,8 +85,10 @@ search:confluence
 ```
 
 > Der Service-Account braucht zusätzlich **Leserechte auf die zu sichernden
-> Spaces** (Space Settings → Permissions). Fehlen einzelne Scopes, werden die
-> betroffenen Datentypen übersprungen (per-Endpoint non-fatal), der Rest läuft.
+> Spaces** (Space Settings → Permissions). Für den Download der Anhangsdateien kann
+> zusätzlich `readonly:content.attachment:confluence` nötig sein. Fehlen Scopes,
+> werden die betroffenen Teile als `failed` im Manifest erfasst, der Rest läuft
+> weiter, und der Lauf endet mit Exit-Code 1.
 
 **Backup ausführen:**
 
@@ -104,7 +116,8 @@ Optionen:
   --domain DOMAIN        Atlassian-Domain (z.B. myorg.atlassian.net) [erforderlich]
   --output PATH          Backup-Zielverzeichnis (Standard: ./backups)
   --exclude-spaces KEYS  Kommagetrennte Space-Keys überspringen
-  --attachments          Anhangsdateien herunterladen (nicht nur Metadaten)
+  --attachments=false    Nur Anhang-Metadaten sichern, keine Dateien
+                         (Standard: Dateien werden heruntergeladen)
   --dry-run              Verbindung testen ohne Daten zu schreiben
   --timeout DURATION     Gesamt-Timeout (Standard: 4h)
   --version              Version anzeigen
@@ -116,27 +129,30 @@ Optionen:
 backups/2026-03-08T12-00-00/
 ├── spaces/
 │   └── KB/
-│       ├── space.json           # Space-Metadaten + Berechtigungen
+│       ├── space.json           # Space-Objekt (inkl. homepageId) + Berechtigungen + Eigenschaften
 │       ├── labels.json          # Space- + Content-Labels
 │       ├── tasks.json           # Inline-Tasks (Action Items)
 │       ├── custom-content.json  # App-definierte Custom-Content-Typen
-│       ├── templates/           # Space-Templates
+│       ├── templates/           # Space-Templates (<Name>_<templateId>.json)
 │       ├── whiteboards/         # Whiteboard-Metadaten (pro ID)
 │       ├── databases/           # Database-Metadaten (pro ID)
 │       ├── folders/             # Folder-Metadaten (pro ID)
 │       ├── embeds/              # Embed-Metadaten (pro ID)
-│       ├── pages/
+│       ├── pages/                # aktuelle und archivierte Seiten, als Baum
 │       │   └── Getting_Started/
-│       │       ├── index.html   # Page-HTML
-│       │       ├── page.json    # Metadaten
-│       │       ├── comments.json
-│       │       └── attachments/
-│       │           └── metadata.json
+│       │       ├── index.html        # Seiteninhalt (Confluence-Storage-Format)
+│       │       ├── page.json         # vollständiges Seitenobjekt ohne Body
+│       │       ├── comments.json     # Footer- + Inline-Kommentare, je mit "replies"
+│       │       ├── labels.json       # Labels der Seite
+│       │       ├── properties.json   # Content-Properties
+│       │       ├── versions.json     # Versionshistorie (Metadaten)
+│       │       ├── attachments/
+│       │       │   ├── metadata.json # vollständige Anhang-Objekte
+│       │       │   └── files/        # <attachmentId>_<Dateiname>
+│       │       └── Unterseite/
 │       └── blog/
-│           └── 2026-03-01_My_Post/
-│               ├── index.html
-│               └── post.json
-├── users.json
+│           └── 2026-03-01_My_Post/   # gleicher Aufbau wie eine Seite, post.json statt page.json
+├── users.json                        # alle referenzierten Konten (Autoren, Kommentierende, …)
 ├── backup-manifest.json
 └── backup-manifest.sig          # HMAC-SHA-256-Signatur
 ```
@@ -145,6 +161,9 @@ backups/2026-03-08T12-00-00/
 > sie werden pro Space via CQL-Suche entdeckt und einzeln geladen. Die API
 > liefert für diese Typen nur **Metadaten** (Canvas-/Datenbankinhalte sind
 > nicht exportierbar). Dateien werden nur geschrieben, wenn Inhalt vorhanden ist.
+>
+> Nicht gesichert: der Inhalt früherer Versionen (nur deren Metadaten), Likes und
+> gelöschte/Papierkorb-Inhalte.
 
 ## Security & Trust
 

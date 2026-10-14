@@ -30,7 +30,9 @@ func run(args []string) int {
 	domain := fs.String("domain", "", "Atlassian domain (e.g. myorg.atlassian.net)")
 	output := fs.String("output", "./backups", "output directory")
 	excludeRaw := fs.String("exclude-spaces", "", "comma-separated space keys to skip")
-	attachments := fs.Bool("attachments", false, "download attachment files (not just metadata)")
+	// On by default: pages embed their images as attachments, so a restore
+	// without the files is incomplete. --attachments=false keeps metadata only.
+	attachments := fs.Bool("attachments", true, "download attachment files (--attachments=false: metadata only)")
 	timeout := fs.Duration("timeout", 4*time.Hour, "overall timeout")
 	dryRun := fs.Bool("dry-run", false, "fetch data but do not write files")
 	showVersion := fs.Bool("version", false, "print version and exit")

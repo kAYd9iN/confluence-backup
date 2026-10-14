@@ -104,6 +104,21 @@ ENDPOINTS = {
     "templates_blueprint_v1": ("v1", "/wiki/rest/api/template/blueprint"),
     "user_v1":               ("v1", "/wiki/rest/api/user"),
     "search_v1":             ("v1", "/wiki/rest/api/search"),
+    # Per page / blog post: replies, labels, properties, versions, attachments.
+    "page_labels":              ("v2", "/pages/{id}/labels"),
+    "page_properties":          ("v2", "/pages/{page-id}/properties"),
+    "page_versions":            ("v2", "/pages/{id}/versions"),
+    "blogpost_attachments":     ("v2", "/blogposts/{id}/attachments"),
+    "blogpost_footer_comments": ("v2", "/blogposts/{id}/footer-comments"),
+    "blogpost_inline_comments": ("v2", "/blogposts/{id}/inline-comments"),
+    "blogpost_labels":          ("v2", "/blogposts/{id}/labels"),
+    "blogpost_properties":      ("v2", "/blogposts/{blogpost-id}/properties"),
+    "blogpost_versions":        ("v2", "/blogposts/{id}/versions"),
+    "footer_comment_replies":   ("v2", "/footer-comments/{id}/children"),
+    "inline_comment_replies":   ("v2", "/inline-comments/{id}/children"),
+    # Binary response: no JSON schema (recorded as __SCHEMA_UNPARSEABLE__); tracked so
+    # removal of the endpoint shows up as __ENDPOINT_MISSING__.
+    "attachment_download_v1":   ("v1", "/wiki/rest/api/content/{id}/child/attachment/{attachmentId}/download"),
 }
 
 specs = {"v2": v2, "v1": v1}
