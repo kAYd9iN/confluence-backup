@@ -188,6 +188,15 @@ verified nothing.
   - `<img src>` without a scheme is read as an ATTACHMENT NAME of the current page, so
     images use XWiki attachment references (`Resolver.Image`: `file` or
     `Space.Page.WebHome@file`, escaped), while links keep `/bin/view|download/…` URLs
+- Learned from a live Confluence Cloud site (2026-10-14, confluence-backup-tooltest):
+  - folders/whiteboards return top-level `createdAt` as epoch MILLISECONDS (pages: ISO string)
+    → `model.timestamp` accepts both
+  - whiteboards/databases/embeds sit in the page tree (parentId, position) → `model.KindSmart`,
+    shown in export/XWiki with a "content not exportable via API" notice
+  - templates: 285 blueprints per space — the old single request (limit 200) silently lost 85
+  - newer-editor content as `<ac:adf-node type="decision-list|decision-item|panel">` without
+    fallback → handled in convert.adfNode; unknown types are reported as `adf:<type>`
+  - attachments via the v1 download endpoint + redirect: sizes and file signatures verified
 - `TestXWikiImport_Live` (opt-in: XWIKI_TEST_URL, XWIKI_USER, XWIKI_PASSWORD) imports twice
   into a real XWiki and checks storage, attachment, tags and the rendered page. Quick setup:
   `xwiki:lts-postgres-tomcat` + `postgres` via compose, enable `xwiki.superadminpassword`

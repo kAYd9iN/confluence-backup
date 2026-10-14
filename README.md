@@ -223,6 +223,12 @@ backups/2026-03-08T12-00-00/
 > Nicht gesichert: der Inhalt früherer Versionen (nur deren Metadaten), Likes und
 > gelöschte/Papierkorb-Inhalte.
 
+> **Kurzes Ausgabeverzeichnis wählen** (z. B. `D:\Backups\confluence`): Der Seitenbaum wird
+> als Verzeichnisbaum abgelegt, und tiefe Bäume mit langen Titeln überschreiten schnell die
+> Windows-Pfadgrenze von 260 Zeichen. `confluence-backup` selbst (inkl. `verify`, `export`,
+> `import-xwiki`) kommt mit langen Pfaden zurecht, viele andere Werkzeuge (Explorer,
+> Archivprogramme, Skripte) nicht.
+
 ## Security & Trust
 
 | Maßnahme | Details |

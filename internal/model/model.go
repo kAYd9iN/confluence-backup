@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kAYd9iN/confluence-backup/internal/storage"
 )
@@ -39,11 +40,15 @@ const (
 	KindPage Kind = iota
 	KindFolder
 	KindBlogPost
+	// KindSmart is a whiteboard, database or embed: part of the page tree,
+	// but the API exposes metadata only (SmartType says which).
+	KindSmart
 )
 
-// Page is a page, folder or blog post.
+// Page is a page, folder, smart item or blog post.
 type Page struct {
 	Kind                                    Kind
+	SmartType                               string // KindSmart: "whiteboard", "database" or "embed"
 	ID, Title, ParentID, ParentType, Status string
 	AuthorID, CreatedAt                     string
 	VersionNumber                           int
@@ -209,27 +214,47 @@ func readJSON(path string, v any) error {
 
 // contentJSON is the subset of page.json / post.json / folders/*.json used here.
 type contentJSON struct {
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	ParentID   string `json:"parentId"`
-	ParentType string `json:"parentType"`
-	Status     string `json:"status"`
-	AuthorID   string `json:"authorId"`
-	CreatedAt  string `json:"createdAt"`
-	Position   *int   `json:"position"`
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	ParentID   string    `json:"parentId"`
+	ParentType string    `json:"parentType"`
+	Status     string    `json:"status"`
+	AuthorID   string    `json:"authorId"`
+	CreatedAt  timestamp `json:"createdAt"`
+	Position   *int      `json:"position"`
 	Version    struct {
-		Number    int    `json:"number"`
-		AuthorID  string `json:"authorId"`
-		CreatedAt string `json:"createdAt"`
+		Number    int       `json:"number"`
+		AuthorID  string    `json:"authorId"`
+		CreatedAt timestamp `json:"createdAt"`
 	} `json:"version"`
+}
+
+// timestamp accepts both forms Confluence uses for createdAt: an ISO-8601
+// string (pages, blog posts, versions) or epoch milliseconds (folders,
+// whiteboards — seen on a live site). It is kept as an RFC 3339 string.
+type timestamp string
+
+func (t *timestamp) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*t = timestamp(s)
+		return nil
+	}
+	var ms int64
+	if err := json.Unmarshal(b, &ms); err != nil {
+		*t = "" // unknown shape: no date rather than a failed load
+		return nil
+	}
+	*t = timestamp(time.UnixMilli(ms).UTC().Format(time.RFC3339))
+	return nil
 }
 
 func (c contentJSON) page(kind Kind, dir string, s *Space) *Page {
 	return &Page{
 		Kind: kind, ID: c.ID, Title: c.Title, ParentID: c.ParentID, ParentType: c.ParentType,
-		Status: c.Status, AuthorID: c.AuthorID, CreatedAt: c.CreatedAt, Position: c.Position,
+		Status: c.Status, AuthorID: c.AuthorID, CreatedAt: string(c.CreatedAt), Position: c.Position,
 		VersionNumber: c.Version.Number, VersionAuthorID: c.Version.AuthorID,
-		VersionCreatedAt: c.Version.CreatedAt, Space: s, Dir: dir,
+		VersionCreatedAt: string(c.Version.CreatedAt), Space: s, Dir: dir,
 	}
 }
 
@@ -286,6 +311,24 @@ func loadSpace(dir string) (*Space, error) {
 			return nil, err
 		}
 		s.add(c.page(KindFolder, "", s))
+	}
+
+	// Whiteboards, databases and embeds sit in the page tree too; only their
+	// metadata is exportable, but they must not silently vanish from it.
+	for _, kind := range []string{"whiteboard", "database", "embed"} {
+		items, _ := filepath.Glob(filepath.Join(dir, kind+"s", "*.json"))
+		for _, f := range items {
+			var c contentJSON
+			if err := readJSON(f, &c); err != nil {
+				return nil, err
+			}
+			p := c.page(KindSmart, "", s)
+			p.SmartType = kind
+			if p.Title == "" {
+				p.Title = kind + " " + p.ID
+			}
+			s.add(p)
+		}
 	}
 
 	// Blog posts.

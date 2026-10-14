@@ -109,7 +109,7 @@ func pageHref(p *model.Page) string {
 	switch p.Kind {
 	case model.KindBlogPost:
 		return key(p.Space) + "/b/" + storage.SanitizeName(p.ID) + ".html"
-	case model.KindFolder:
+	case model.KindFolder, model.KindSmart:
 		return key(p.Space) + "/index.html#folder-" + storage.SanitizeName(p.ID)
 	}
 	return key(p.Space) + "/p/" + storage.SanitizeName(p.ID) + ".html"
@@ -402,9 +402,13 @@ func (e *exporter) tree(ps []*model.Page, prefix string) string {
 	b.WriteString("<ul class=\"tree\">\n")
 	for _, p := range ps {
 		b.WriteString("<li>")
-		if p.Kind == model.KindFolder {
+		switch p.Kind {
+		case model.KindFolder:
 			b.WriteString(`<span class="folder" id="folder-` + esc(storage.SanitizeName(p.ID)) + `">📁 ` + esc(p.Title) + "</span>")
-		} else {
+		case model.KindSmart:
+			b.WriteString(`<span class="folder" id="folder-` + esc(storage.SanitizeName(p.ID)) + `">` + smartIcon(p.SmartType) + " " + esc(p.Title) +
+				` <em>(` + esc(smartLabel(p.SmartType)) + `, Inhalt über die Confluence-API nicht exportierbar)</em></span>`)
+		default:
 			b.WriteString(`<a href="` + esc(prefix+pageHref(p)) + `">` + esc(p.Title) + "</a>")
 			if p.Status == "archived" {
 				b.WriteString(` <span class="badge">Archiviert</span>`)
@@ -417,6 +421,28 @@ func (e *exporter) tree(ps []*model.Page, prefix string) string {
 	}
 	b.WriteString("</ul>\n")
 	return b.String()
+}
+
+func smartLabel(t string) string {
+	switch t {
+	case "whiteboard":
+		return "Whiteboard"
+	case "database":
+		return "Datenbank"
+	case "embed":
+		return "Eingebettete Seite"
+	}
+	return t
+}
+
+func smartIcon(t string) string {
+	switch t {
+	case "whiteboard":
+		return "🖍"
+	case "database":
+		return "🗃"
+	}
+	return "🔗"
 }
 
 func (e *exporter) spaceIndex(s *model.Space) string {
