@@ -103,7 +103,7 @@ jobs:
         if: >-
           steps.check.outputs.exit_code == '1' && steps.open.outputs.number == '' &&
           steps.anthropic.outputs.present == 'true'
-        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967  # v1
+        uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c  # v1
         with:
           # Either secret works: ANTHROPIC_API_KEY (Console/pay-per-token) or
           # CLAUDE_CODE_OAUTH_TOKEN (Pro/Max subscription via `claude setup-token`).
